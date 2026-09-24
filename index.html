@@ -89,6 +89,42 @@
     width: 46px; height: 46px; margin: -18px auto 2px; border-radius: 50%;
     background: var(--stamp); color: #fff; line-height: 46px; font-size: 28px;
   }
+
+  /* ===== 第二步：支出表單與列表 ===== */
+  .amount-row { display: flex; gap: 8px; }
+  .amount-row input { flex: 1; font-size: 22px; font-weight: 600; }
+  .amount-row select { width: 96px; }
+  .hint { font-size: 14px; color: var(--muted); margin-top: 6px; }
+  .pick-list { display: flex; flex-wrap: wrap; gap: 8px; }
+  .pick {
+    padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line);
+    background: #fff; color: var(--ink); font-size: 15px;
+  }
+  .pick.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-top: 12px; }
+  .seg button { flex: 1; padding: 10px; border: 0; background: #fff; color: var(--muted); }
+  .seg button.on { background: var(--ink); color: #fff; }
+  .custom-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .custom-row span { width: 80px; }
+  .custom-row input { flex: 1; }
+  .remain { font-weight: 600; margin-top: 8px; }
+  .remain.ok { color: var(--plus); }
+  .remain.bad { color: var(--minus); }
+
+  .day-head { font-size: 14px; color: var(--muted); margin: 18px 4px 6px; display: flex; justify-content: space-between; }
+  .exp {
+    display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 8px; color: var(--ink);
+  }
+  .exp .icon { font-size: 24px; }
+  .exp .mid { flex: 1; min-width: 0; }
+  .exp .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .exp .who { font-size: 13px; color: var(--muted); }
+  .exp .money { text-align: right; font-weight: 600; }
+  .exp .money small { display: block; font-weight: 400; font-size: 13px; color: var(--muted); }
+  .total-bar { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: flex; justify-content: space-between; align-items: baseline; }
+  .total-bar strong { font-size: 22px; }
 </style>
 </head>
 <body>
@@ -111,6 +147,8 @@
         <option value="USD">美元 USD</option>
         <option value="JPY">日圓 JPY</option>
         <option value="EUR">歐元 EUR</option>
+        <option value="KRW">韓元 KRW</option>
+        <option value="GBP">英鎊 GBP</option>
       </select>
       <label for="setup-member">旅伴（第一個加入的是你自己）</label>
       <div class="row">
@@ -124,12 +162,51 @@
 
   <!-- 頁面 1：支出列表 -->
   <section class="page" id="page-list">
-    <div class="empty"><strong>還沒有任何支出</strong>點下方的 ＋ 記下第一筆</div>
+    <div id="expense-list"></div>
   </section>
 
-  <!-- 頁面 2：新增支出（第二步會完成） -->
+  <!-- 頁面 2：新增／編輯支出 -->
   <section class="page" id="page-add">
-    <div class="empty"><strong>新增支出</strong>下一步會在這裡做表單</div>
+    <div class="card">
+      <h2 id="form-title">新增支出</h2>
+
+      <label for="f-amount">金額</label>
+      <div class="amount-row">
+        <input id="f-amount" inputmode="decimal" placeholder="0" autocomplete="off" oninput="updateForm()">
+        <select id="f-currency" onchange="onCurrencyChange()"></select>
+      </div>
+
+      <!-- 幣別跟結算幣別不同時才顯示匯率 -->
+      <div id="rate-box">
+        <label for="f-rate" id="rate-label">匯率</label>
+        <input id="f-rate" inputmode="decimal" placeholder="例如 32.5" oninput="updateForm()">
+        <div class="hint" id="rate-preview"></div>
+      </div>
+
+      <label for="f-title">項目</label>
+      <input id="f-title" placeholder="例如：Katz's 午餐">
+
+      <label>分類</label>
+      <div class="pick-list" id="f-category"></div>
+
+      <label for="f-date">日期</label>
+      <input id="f-date" type="date">
+
+      <label>誰付的錢</label>
+      <div class="pick-list" id="f-payer"></div>
+
+      <label>誰要分攤</label>
+      <div class="pick-list" id="f-participants"></div>
+
+      <div class="seg">
+        <button id="seg-equal" onclick="setSplitType('equal')">平均分攤</button>
+        <button id="seg-custom" onclick="setSplitType('custom')">各付各的</button>
+      </div>
+      <div id="split-detail"></div>
+
+      <button class="btn" onclick="saveExpense()" id="save-btn">儲存支出</button>
+      <button class="btn danger" onclick="deleteExpense()" id="delete-btn">刪除這筆</button>
+    </div>
   </section>
 
   <!-- 頁面 3：結算（第三步會完成） -->
@@ -154,7 +231,7 @@
 
 <nav class="tabs" id="tabs">
   <button data-page="page-list" onclick="showPage('page-list')"><span>🧾</span>支出</button>
-  <button data-page="page-add" class="add" onclick="showPage('page-add')"><span>＋</span>新增</button>
+  <button data-page="page-add" class="add" onclick="openAddForm()"><span>＋</span>新增</button>
   <button data-page="page-settle" onclick="showPage('page-settle')"><span>⚖️</span>結算</button>
   <button data-page="page-settings" onclick="showPage('page-settings')"><span>⚙️</span>設定</button>
 </nav>
@@ -285,6 +362,7 @@ function render() {
     `<span class="chip ${i === 0 ? 'me' : ''}">${escapeHTML(m.name)}</span>`
   ).join('');
   tabs.classList.add('show');
+  renderList();
   // 目前在設定頁就留在設定頁，否則回到支出列表
   const current = document.querySelector('.page.active');
   if (!current || current.id === 'page-setup') showPage('page-list');
@@ -293,6 +371,368 @@ function render() {
 // 輸入名字後按鍵盤的 Enter 也能加入
 document.getElementById('setup-member').addEventListener('keydown', e => { if (e.key === 'Enter') addSetupMember(); });
 document.getElementById('new-member').addEventListener('keydown', e => { if (e.key === 'Enter') addMemberLater(); });
+
+
+/* =========================================================
+   第二步：新增支出
+   ---------------------------------------------------------
+   金額一律用「最小單位的整數」儲存，避免小數誤差：
+     USD 12.34 → 1234（美分）    TWD 350 → 350（元）
+   每一筆 expense 的樣子：
+   {
+     id, title, category, date: '2027-02-10',
+     currency: 'USD', amount: 9000,          ← 原幣金額（最小單位）
+     rate: 32.5,                             ← 1 單位外幣 = 幾元結算幣
+     payerId,                                ← 誰付的
+     splitType: 'equal' | 'custom',
+     shares:     { 成員id: 原幣金額 },        ← 每人應分攤多少（原幣）
+     baseAmount, baseShares: { 成員id: 結算幣金額 }  ← 換算好的，第三步結算直接用
+     createdAt, updatedAt
+   }
+   ========================================================= */
+
+// 各幣別有幾位小數
+const CURRENCIES = {
+  TWD: { name: '新台幣', decimals: 0, symbol: 'NT$' },
+  USD: { name: '美元', decimals: 2, symbol: 'US$' },
+  JPY: { name: '日圓', decimals: 0, symbol: '¥' },
+  EUR: { name: '歐元', decimals: 2, symbol: '€' },
+  KRW: { name: '韓元', decimals: 0, symbol: '₩' },
+  GBP: { name: '英鎊', decimals: 2, symbol: '£' }
+};
+const CATEGORIES = [
+  { id: 'food', icon: '🍽️', name: '餐飲' },
+  { id: 'transport', icon: '🚇', name: '交通' },
+  { id: 'stay', icon: '🏨', name: '住宿' },
+  { id: 'ticket', icon: '🎟️', name: '門票' },
+  { id: 'shopping', icon: '🛍️', name: '購物' },
+  { id: 'other', icon: '📦', name: '其他' }
+];
+
+// 表單目前的狀態
+// 注意：不能取名叫 form！在 onclick 裡，form 會被瀏覽器當成「按鈕所屬的 <form>」，變成 null
+let draft = null;
+
+/* ---------- 金額工具 ---------- */
+
+// 把使用者輸入的文字轉成最小單位整數。完全不用浮點數運算。
+// 回傳 null 代表格式錯誤。
+function parseAmount(text, currency) {
+  const d = CURRENCIES[currency].decimals;
+  const t = String(text).trim().replace(/,/g, '');
+  if (!/^\d+(\.\d*)?$/.test(t)) return null;
+  const [intPart, fracPart = ''] = t.split('.');
+  if (fracPart.length > d) return null;          // 例如台幣輸入了小數
+  return parseInt(intPart + fracPart.padEnd(d, '0'), 10);
+}
+
+// 最小單位整數 → 顯示用文字（加千分位）
+function formatAmount(minor, currency) {
+  const c = CURRENCIES[currency];
+  const neg = minor < 0;
+  const abs = Math.abs(minor);
+  const divisor = 10 ** c.decimals;
+  const intStr = Math.floor(abs / divisor).toLocaleString('en-US');
+  const frac = c.decimals ? '.' + String(abs % divisor).padStart(c.decimals, '0') : '';
+  return (neg ? '-' : '') + c.symbol + intStr + frac;
+}
+
+// 把 total 依照權重分配成整數，保證加總剛好等於 total（最大餘數法）
+// 例：allocate(1000, [1,1,1]) → [334, 333, 333]
+function allocate(total, weights) {
+  const sum = weights.reduce((a, b) => a + b, 0);
+  if (sum === 0) return weights.map(() => 0);
+  const raw = weights.map(w => total * w / sum);
+  const result = raw.map(Math.floor);
+  let left = total - result.reduce((a, b) => a + b, 0);
+  const order = raw.map((r, i) => ({ i, rem: r - Math.floor(r) })).sort((a, b) => b.rem - a.rem);
+  for (let k = 0; k < left; k++) result[order[k].i] += 1;
+  return result;
+}
+
+// 原幣金額 → 結算幣金額（都是最小單位整數）
+function convertToBase(minor, currency, rate) {
+  if (currency === trip.baseCurrency) return minor;
+  const from = CURRENCIES[currency].decimals;
+  const to = CURRENCIES[trip.baseCurrency].decimals;
+  return Math.round(minor / 10 ** from * rate * 10 ** to);
+}
+
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function memberName(id) {
+  const m = trip.members.find(m => m.id === id);
+  return m ? m.name : '（已移除）';
+}
+
+/* ---------- 開啟表單 ---------- */
+function openAddForm() {
+  const lastCurrency = trip.lastCurrency || trip.baseCurrency;
+  draft = {
+    editingId: null,
+    currency: lastCurrency,
+    category: 'food',
+    payerId: trip.members[0].id,
+    participants: trip.members.map(m => m.id),   // 預設全員分攤
+    splitType: 'equal',
+    customText: {}                                // 自訂金額的輸入文字
+  };
+  document.getElementById('f-amount').value = '';
+  document.getElementById('f-title').value = '';
+  document.getElementById('f-date').value = todayStr();
+  document.getElementById('f-rate').value = (trip.rates || {})[lastCurrency] || '';
+  document.getElementById('form-title').textContent = '新增支出';
+  document.getElementById('save-btn').textContent = '儲存支出';
+  document.getElementById('delete-btn').style.display = 'none';
+  buildForm();
+  showPage('page-add');
+}
+
+function openEditForm(id) {
+  const e = expenses.find(x => x.id === id);
+  if (!e) return;
+  const d = CURRENCIES[e.currency].decimals;
+  const toText = v => (v / 10 ** d).toFixed(d);
+  draft = {
+    editingId: id,
+    currency: e.currency,
+    category: e.category,
+    payerId: e.payerId,
+    participants: Object.keys(e.shares),
+    splitType: e.splitType,
+    customText: {}
+  };
+  if (e.splitType === 'custom') {
+    for (const [mid, v] of Object.entries(e.shares)) draft.customText[mid] = toText(v);
+  }
+  document.getElementById('f-amount').value = toText(e.amount);
+  document.getElementById('f-title').value = e.title;
+  document.getElementById('f-date').value = e.date;
+  document.getElementById('f-rate').value = e.currency === trip.baseCurrency ? '' : e.rate;
+  document.getElementById('form-title').textContent = '編輯支出';
+  document.getElementById('save-btn').textContent = '儲存修改';
+  document.getElementById('delete-btn').style.display = 'block';
+  buildForm();
+  showPage('page-add');
+}
+
+// 畫出幣別、分類、付款人、分攤對象的選項
+function buildForm() {
+  document.getElementById('f-currency').innerHTML = Object.keys(CURRENCIES).map(c =>
+    `<option value="${c}" ${c === draft.currency ? 'selected' : ''}>${c}</option>`).join('');
+
+  document.getElementById('f-category').innerHTML = CATEGORIES.map(c =>
+    `<button class="pick ${c.id === draft.category ? 'on' : ''}" onclick="draft.category='${c.id}';buildForm()">${c.icon} ${c.name}</button>`).join('');
+
+  document.getElementById('f-payer').innerHTML = trip.members.map(m =>
+    `<button class="pick ${m.id === draft.payerId ? 'on' : ''}" onclick="draft.payerId='${m.id}';buildForm()">${escapeHTML(m.name)}</button>`).join('');
+
+  document.getElementById('f-participants').innerHTML = trip.members.map(m =>
+    `<button class="pick ${draft.participants.includes(m.id) ? 'on' : ''}" onclick="toggleParticipant('${m.id}')">${escapeHTML(m.name)}</button>`).join('');
+
+  document.getElementById('seg-equal').classList.toggle('on', draft.splitType === 'equal');
+  document.getElementById('seg-custom').classList.toggle('on', draft.splitType === 'custom');
+  updateForm();
+}
+
+function toggleParticipant(id) {
+  const i = draft.participants.indexOf(id);
+  if (i >= 0) draft.participants.splice(i, 1);
+  else draft.participants.push(id);
+  // 保持跟成員名單相同的順序
+  draft.participants.sort((a, b) => trip.members.findIndex(m => m.id === a) - trip.members.findIndex(m => m.id === b));
+  buildForm();
+}
+
+function setSplitType(t) {
+  draft.splitType = t;
+  buildForm();
+}
+
+function onCurrencyChange() {
+  draft.currency = document.getElementById('f-currency').value;
+  // 自動帶入這個幣別上次用的匯率
+  document.getElementById('f-rate').value = (trip.rates || {})[draft.currency] || '';
+  updateForm();
+}
+
+/* ---------- 即時更新：匯率預覽、分攤明細 ---------- */
+function updateForm() {
+  const cur = draft.currency;
+  const base = trip.baseCurrency;
+  const amount = parseAmount(document.getElementById('f-amount').value || '0', cur);
+
+  // 匯率區塊
+  const rateBox = document.getElementById('rate-box');
+  if (cur === base) {
+    rateBox.style.display = 'none';
+  } else {
+    rateBox.style.display = 'block';
+    document.getElementById('rate-label').textContent = `匯率（1 ${cur} ＝ 幾 ${base}）`;
+    const rate = parseFloat(document.getElementById('f-rate').value);
+    document.getElementById('rate-preview').textContent =
+      amount && rate > 0 ? `約 ${formatAmount(convertToBase(amount, cur, rate), base)}` : '';
+  }
+
+  // 分攤明細
+  const box = document.getElementById('split-detail');
+  const ids = draft.participants;
+  if (ids.length === 0) {
+    box.innerHTML = '<div class="hint">請至少選一個分攤的人</div>';
+    return;
+  }
+  if (draft.splitType === 'equal') {
+    if (!amount) { box.innerHTML = ''; return; }
+    const parts = allocate(amount, ids.map(() => 1));
+    box.innerHTML = '<div class="hint">' + ids.map((id, i) =>
+      `${escapeHTML(memberName(id))} ${formatAmount(parts[i], cur)}`).join('、') + '</div>';
+  } else {
+    // 各付各的：每人一個輸入框。只重建一次，避免打字時輸入框跳掉
+    const existing = [...box.querySelectorAll('input[data-mid]')].map(i => i.dataset.mid).join();
+    if (existing !== ids.join()) {
+      box.innerHTML = ids.map(id =>
+        `<div class="custom-row"><span>${escapeHTML(memberName(id))}</span>` +
+        `<input inputmode="decimal" data-mid="${id}" value="${draft.customText[id] || ''}" placeholder="0" ` +
+        `oninput="draft.customText['${id}']=this.value;updateRemain()"></div>`).join('') +
+        '<div class="remain" id="remain"></div>';
+    }
+    updateRemain();
+  }
+}
+
+// 各付各的模式：顯示還差多少才等於總額
+function updateRemain() {
+  const el = document.getElementById('remain');
+  if (!el) return;
+  const cur = draft.currency;
+  const amount = parseAmount(document.getElementById('f-amount').value || '0', cur) || 0;
+  let sum = 0;
+  for (const id of draft.participants) {
+    const v = parseAmount(draft.customText[id] || '0', cur);
+    if (v === null) { el.textContent = `${memberName(id)} 的金額格式不對`; el.className = 'remain bad'; return; }
+    sum += v;
+  }
+  const diff = amount - sum;
+  if (diff === 0) { el.textContent = '✓ 金額剛好'; el.className = 'remain ok'; }
+  else if (diff > 0) { el.textContent = `還有 ${formatAmount(diff, cur)} 沒分配`; el.className = 'remain bad'; }
+  else { el.textContent = `超過總額 ${formatAmount(-diff, cur)}`; el.className = 'remain bad'; }
+}
+
+/* ---------- 儲存 ---------- */
+function saveExpense() {
+  const cur = draft.currency;
+  const base = trip.baseCurrency;
+  const amount = parseAmount(document.getElementById('f-amount').value, cur);
+  if (!amount) {
+    alert(CURRENCIES[cur].decimals === 0 ? `請輸入金額（${cur} 不用小數點）` : '請輸入金額');
+    return;
+  }
+  const title = document.getElementById('f-title').value.trim() ||
+    CATEGORIES.find(c => c.id === draft.category).name;
+  const date = document.getElementById('f-date').value || todayStr();
+
+  let rate = 1;
+  if (cur !== base) {
+    rate = parseFloat(document.getElementById('f-rate').value);
+    if (!(rate > 0)) { alert('請輸入匯率'); return; }
+  }
+
+  const ids = draft.participants;
+  if (ids.length === 0) { alert('請至少選一個分攤的人'); return; }
+
+  // 算出每人分攤的原幣金額
+  let parts;
+  if (draft.splitType === 'equal') {
+    parts = allocate(amount, ids.map(() => 1));
+  } else {
+    parts = ids.map(id => parseAmount(draft.customText[id] || '0', cur));
+    if (parts.some(p => p === null)) { alert('有人的金額格式不對'); return; }
+    const sum = parts.reduce((a, b) => a + b, 0);
+    if (sum !== amount) { alert('每個人的金額加起來要等於總額'); return; }
+  }
+  const shares = {};
+  ids.forEach((id, i) => { shares[id] = parts[i]; });
+
+  // 換算成結算幣：先換總額，再依比例分配，保證加總一致
+  const baseAmount = convertToBase(amount, cur, rate);
+  const baseParts = allocate(baseAmount, parts);
+  const baseShares = {};
+  ids.forEach((id, i) => { baseShares[id] = baseParts[i]; });
+
+  const now = Date.now();
+  const data = {
+    title, category: draft.category, date,
+    currency: cur, amount, rate,
+    payerId: draft.payerId,
+    splitType: draft.splitType,
+    shares, baseAmount, baseShares,
+    updatedAt: now
+  };
+
+  if (draft.editingId) {
+    const e = expenses.find(x => x.id === draft.editingId);
+    Object.assign(e, data);
+  } else {
+    expenses.push({ id: newId(), createdAt: now, ...data });
+  }
+
+  // 記住這次的幣別和匯率，下次自動帶入
+  trip.lastCurrency = cur;
+  if (cur !== base) {
+    trip.rates = trip.rates || {};
+    trip.rates[cur] = rate;
+  }
+  saveData();
+  renderList();
+  showPage('page-list');
+}
+
+function deleteExpense() {
+  if (!draft.editingId) return;
+  if (!confirm('確定刪除這筆支出？')) return;
+  expenses = expenses.filter(x => x.id !== draft.editingId);
+  saveData();
+  renderList();
+  showPage('page-list');
+}
+
+/* ---------- 支出列表 ---------- */
+function renderList() {
+  const box = document.getElementById('expense-list');
+  if (!trip) return;
+  if (expenses.length === 0) {
+    box.innerHTML = '<div class="empty"><strong>還沒有任何支出</strong>點下方的 ＋ 記下第一筆</div>';
+    return;
+  }
+  const base = trip.baseCurrency;
+  const total = expenses.reduce((a, e) => a + e.baseAmount, 0);
+
+  // 新的日期在上面；同一天內新的在上面
+  const sorted = [...expenses].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
+  const groups = {};
+  sorted.forEach(e => { (groups[e.date] = groups[e.date] || []).push(e); });
+
+  let html = `<div class="total-bar"><span>旅程總花費</span><strong>${formatAmount(total, base)}</strong></div>`;
+  for (const [date, list] of Object.entries(groups)) {
+    const dayTotal = list.reduce((a, e) => a + e.baseAmount, 0);
+    const [y, m, d] = date.split('-');
+    html += `<div class="day-head"><span>${Number(m)}/${Number(d)}</span><span>${formatAmount(dayTotal, base)}</span></div>`;
+    html += list.map(e => {
+      const cat = CATEGORIES.find(c => c.id === e.category) || CATEGORIES[5];
+      const n = Object.keys(e.shares).length;
+      const converted = e.currency !== base ? `<small>≈ ${formatAmount(e.baseAmount, base)}</small>` : '';
+      return `<button class="exp" onclick="openEditForm('${e.id}')">
+        <span class="icon">${cat.icon}</span>
+        <span class="mid"><div class="title">${escapeHTML(e.title)}</div>
+          <div class="who">${escapeHTML(memberName(e.payerId))} 付款・${n} 人分攤</div></span>
+        <span class="money">${formatAmount(e.amount, e.currency)}${converted}</span>
+      </button>`;
+    }).join('');
+  }
+  box.innerHTML = html;
+}
 
 /* ---------- 啟動（永遠放在 script 最後面，所有變數和函式都定義好之後才執行） ---------- */
 loadData();

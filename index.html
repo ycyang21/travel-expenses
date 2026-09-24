@@ -125,6 +125,25 @@
   .exp .money small { display: block; font-weight: 400; font-size: 13px; color: var(--muted); }
   .total-bar { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: flex; justify-content: space-between; align-items: baseline; }
   .total-bar strong { font-size: 22px; }
+
+  /* ===== 第三步：結算 ===== */
+  .bal { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .bal:last-child { border-bottom: 0; }
+  .bal .name { font-weight: 600; }
+  .bal .detail { font-size: 13px; color: var(--muted); }
+  .bal .net { font-weight: 700; text-align: right; }
+  .net.plus { color: var(--plus); }
+  .net.minus { color: var(--minus); }
+  .net.zero { color: var(--muted); }
+  .transfer { display: flex; align-items: center; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .transfer:last-child { border-bottom: 0; }
+  .transfer .flow { flex: 1; }
+  .transfer .flow b { font-weight: 600; }
+  .transfer .amt { display: block; font-size: 20px; font-weight: 700; }
+  .transfer .done-btn { padding: 8px 12px; border-radius: 8px; border: 1px solid var(--plus); background: #fff; color: var(--plus); white-space: nowrap; }
+  .transfer.paid { color: var(--muted); }
+  .transfer.paid .undo-btn { padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: #fff; color: var(--muted); white-space: nowrap; }
+  .all-clear { text-align: center; padding: 20px 0 8px; color: var(--plus); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -211,7 +230,7 @@
 
   <!-- 頁面 3：結算（第三步會完成） -->
   <section class="page" id="page-settle">
-    <div class="empty"><strong>結算</strong>第三步會在這裡算出誰該給誰多少</div>
+    <div id="settle-box"></div>
   </section>
 
   <!-- 頁面 4：設定 -->
@@ -248,6 +267,7 @@
 const STORAGE_KEY = 'travelSplit_v1';
 let trip = null;
 let expenses = [];
+let transfers = [];   // 第三步：已經還的錢 { id, fromId, toId, amount(結算幣), date, createdAt }
 let setupMembers = [];   // 建立旅程時暫存的名字
 
 // 產生不重複 id（時間 + 亂數）
@@ -263,7 +283,7 @@ function escapeHTML(s) {
 /* ---------- 存取 ---------- */
 function saveData() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ trip, expenses }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ trip, expenses, transfers }));
   } catch (e) {
     alert('儲存失敗：' + e.message);
   }
@@ -275,6 +295,7 @@ function loadData() {
     const data = JSON.parse(raw);
     trip = data.trip || null;
     expenses = data.expenses || [];
+    transfers = data.transfers || [];
   } catch (e) {
     console.error('讀取失敗', e);
   }
@@ -284,6 +305,7 @@ function loadData() {
 function showPage(id) {
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === id));
   document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('active', b.dataset.page === id));
+  if (id === 'page-settle') renderSettle();
   window.scrollTo(0, 0);
 }
 
@@ -320,6 +342,7 @@ function createTrip() {
     members: setupMembers.map(n => ({ id: newId(), name: n, uid: null }))
   };
   expenses = [];
+  transfers = [];
   setupMembers = [];
   saveData();
   render();
@@ -340,6 +363,7 @@ function resetTrip() {
   if (!confirm(`確定要刪除「${trip.name}」和所有支出嗎？無法復原。`)) return;
   trip = null;
   expenses = [];
+  transfers = [];
   saveData();
   render();
 }
@@ -732,6 +756,157 @@ function renderList() {
     }).join('');
   }
   box.innerHTML = html;
+}
+
+
+/* =========================================================
+   第三步：結算
+   ---------------------------------------------------------
+   1. 每個人的淨額 = 他付出去的錢 − 他應該分攤的錢 ± 已經還的錢
+        正數：別人欠他　　負數：他欠別人
+      因為每筆支出的 baseShares 加總剛好等於 baseAmount，
+      所有人的淨額加起來一定是 0。
+   2. 最少轉帳：每次讓「欠最多的人」還給「被欠最多的人」，
+      能還多少就還多少，其中一方歸零後換下一個。
+      n 個人最多只需要 n−1 筆轉帳。
+   ========================================================= */
+
+function computeBalances() {
+  const bal = {};
+  trip.members.forEach(m => { bal[m.id] = { paid: 0, owed: 0, net: 0 }; });
+  const ensure = id => (bal[id] = bal[id] || { paid: 0, owed: 0, net: 0 });
+
+  for (const e of expenses) {
+    ensure(e.payerId).paid += e.baseAmount;
+    for (const [id, v] of Object.entries(e.baseShares)) ensure(id).owed += v;
+  }
+  for (const id in bal) bal[id].net = bal[id].paid - bal[id].owed;
+
+  // 已經還的錢：付錢的人淨額增加，收錢的人淨額減少
+  for (const t of transfers) {
+    ensure(t.fromId).net += t.amount;
+    ensure(t.toId).net -= t.amount;
+  }
+  return bal;
+}
+
+function computeTransfers(bal) {
+  const creditors = [];  // 別人欠他
+  const debtors = [];    // 他欠別人
+  for (const [id, b] of Object.entries(bal)) {
+    if (b.net > 0) creditors.push({ id, amt: b.net });
+    if (b.net < 0) debtors.push({ id, amt: -b.net });
+  }
+  creditors.sort((a, b) => b.amt - a.amt);
+  debtors.sort((a, b) => b.amt - a.amt);
+
+  const result = [];
+  let i = 0, j = 0;
+  while (i < debtors.length && j < creditors.length) {
+    const pay = Math.min(debtors[i].amt, creditors[j].amt);
+    result.push({ fromId: debtors[i].id, toId: creditors[j].id, amount: pay });
+    debtors[i].amt -= pay;
+    creditors[j].amt -= pay;
+    if (debtors[i].amt === 0) i++;
+    if (creditors[j].amt === 0) j++;
+  }
+  return result;
+}
+
+function renderSettle() {
+  const box = document.getElementById('settle-box');
+  if (!trip) return;
+  if (expenses.length === 0) {
+    box.innerHTML = '<div class="empty"><strong>還沒有支出可以結算</strong>先記幾筆帳再回來看</div>';
+    return;
+  }
+  const base = trip.baseCurrency;
+  const bal = computeBalances();
+  const todo = computeTransfers(bal);
+
+  // 1. 還需要的轉帳
+  let html = '<div class="card"><h2>要怎麼還</h2>';
+  if (todo.length === 0) {
+    html += '<div class="all-clear">✓ 大家都兩清了</div>';
+  } else {
+    html += todo.map((t, i) => `<div class="transfer">
+      <div class="flow"><b>${escapeHTML(memberName(t.fromId))}</b> 給 <b>${escapeHTML(memberName(t.toId))}</b>
+        <span class="amt">${formatAmount(t.amount, base)}</span></div>
+      <button class="done-btn" onclick="markPaid(${i})">已還</button>
+    </div>`).join('');
+  }
+  html += '</div>';
+
+  // 2. 每個人的收支
+  html += '<div class="card"><h2>每人明細</h2>';
+  html += trip.members.map(m => {
+    const b = bal[m.id];
+    const cls = b.net > 0 ? 'plus' : b.net < 0 ? 'minus' : 'zero';
+    const label = b.net > 0 ? '可收回' : b.net < 0 ? '還要付' : '已兩清';
+    return `<div class="bal">
+      <div><div class="name">${escapeHTML(m.name)}</div>
+        <div class="detail">付了 ${formatAmount(b.paid, base)}・實際花費 ${formatAmount(b.owed, base)}</div></div>
+      <div class="net ${cls}"><div class="detail">${label}</div>${formatAmount(Math.abs(b.net), base)}</div>
+    </div>`;
+  }).join('');
+  html += '</div>';
+
+  // 3. 已經還的紀錄
+  if (transfers.length) {
+    html += '<div class="card"><h2>已還款紀錄</h2>';
+    html += [...transfers].sort((a, b) => b.createdAt - a.createdAt).map(t => `<div class="transfer paid">
+      <div class="flow">${escapeHTML(memberName(t.fromId))} 給 ${escapeHTML(memberName(t.toId))}
+        <span class="amt">${formatAmount(t.amount, base)}</span>
+        <span class="detail">${t.date}</span></div>
+      <button class="undo-btn" onclick="undoPaid('${t.id}')">取消</button>
+    </div>`).join('');
+    html += '</div>';
+  }
+
+  html += '<button class="btn ghost" onclick="shareSettle()">分享結算結果</button>';
+  box.innerHTML = html;
+}
+
+// 按「已還」：記一筆還款，結算會自動重算
+function markPaid(i) {
+  const t = computeTransfers(computeBalances())[i];
+  if (!t) return;
+  const msg = `確認 ${memberName(t.fromId)} 已經給 ${memberName(t.toId)} ${formatAmount(t.amount, trip.baseCurrency)}？`;
+  if (!confirm(msg)) return;
+  transfers.push({ id: newId(), fromId: t.fromId, toId: t.toId, amount: t.amount, date: todayStr(), createdAt: Date.now() });
+  saveData();
+  renderSettle();
+}
+
+function undoPaid(id) {
+  if (!confirm('取消這筆還款紀錄？')) return;
+  transfers = transfers.filter(t => t.id !== id);
+  saveData();
+  renderSettle();
+}
+
+// 產生一段文字，可以直接貼到 LINE 群組
+async function shareSettle() {
+  const base = trip.baseCurrency;
+  const bal = computeBalances();
+  const todo = computeTransfers(bal);
+  const total = expenses.reduce((a, e) => a + e.baseAmount, 0);
+  let text = `【${trip.name}】結算\n總花費 ${formatAmount(total, base)}\n\n`;
+  text += todo.length
+    ? todo.map(t => `${memberName(t.fromId)} → ${memberName(t.toId)}：${formatAmount(t.amount, base)}`).join('\n')
+    : '大家都兩清了！';
+  text += '\n\n每人實際花費：\n' + trip.members.map(m => `${m.name} ${formatAmount(bal[m.id].owed, base)}`).join('\n');
+
+  try {
+    if (navigator.share) {           // 手機：跳出分享選單（可選 LINE）
+      await navigator.share({ text });
+    } else {                         // 電腦：複製到剪貼簿
+      await navigator.clipboard.writeText(text);
+      alert('已複製，可以貼到聊天室');
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') prompt('請手動複製：', text);   // 使用者按取消不算錯誤
+  }
 }
 
 /* ---------- 啟動（永遠放在 script 最後面，所有變數和函式都定義好之後才執行） ---------- */

@@ -144,6 +144,18 @@
   .transfer.paid { color: var(--muted); }
   .transfer.paid .undo-btn { padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: #fff; color: var(--muted); white-space: nowrap; }
   .all-clear { text-align: center; padding: 20px 0 8px; color: var(--plus); font-weight: 600; }
+
+  /* ===== 第四步：旅程列表、加入、邀請 ===== */
+  .trip-item {
+    display: flex; justify-content: space-between; align-items: center; width: 100%;
+    padding: 14px; margin-top: 8px; border: 1px solid var(--line); border-radius: 10px;
+    background: #fff; color: var(--ink); text-align: left;
+  }
+  .trip-item small { color: var(--muted); }
+  .chip.pending { background: transparent; border: 1px dashed var(--line); color: var(--muted); }
+  .invite-link { font-size: 14px; word-break: break-all; background: var(--paper); padding: 10px; border-radius: 8px; margin-top: 8px; }
+  .join-pick { display: block; width: 100%; padding: 14px; margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); text-align: left; font-size: 17px; }
+  .join-pick small { float: right; color: var(--muted); font-size: 14px; }
 </style>
 </head>
 <body>
@@ -156,8 +168,12 @@
 <main>
   <!-- 頁面 0：建立旅程（還沒有旅程時才出現） -->
   <section class="page" id="page-setup">
+    <div class="card" id="my-trips-card" style="display:none">
+      <h2>我的旅程</h2>
+      <div id="my-trips"></div>
+    </div>
     <div class="card">
-      <h2>建立旅程</h2>
+      <h2>建立新旅程</h2>
       <label for="setup-name">旅程名稱</label>
       <input id="setup-name" placeholder="例如：紐約波士頓 2027">
       <label for="setup-currency">結算幣別（大家最後用什麼錢還）</label>
@@ -169,13 +185,27 @@
         <option value="KRW">韓元 KRW</option>
         <option value="GBP">英鎊 GBP</option>
       </select>
-      <label for="setup-member">旅伴（第一個加入的是你自己）</label>
+      <label for="setup-member">旅伴（第一個是你自己，其他人之後也可以用邀請連結自己加入）</label>
       <div class="row">
         <input id="setup-member" placeholder="輸入名字">
         <button class="small-btn" onclick="addSetupMember()">加入</button>
       </div>
       <div class="chip-list" id="setup-members"></div>
       <button class="btn" onclick="createTrip()">建立旅程</button>
+    </div>
+  </section>
+
+  <!-- 加入旅程（打開邀請連結時出現） -->
+  <section class="page" id="page-join">
+    <div class="card">
+      <h2 id="join-title">加入旅程</h2>
+      <p class="hint">請點選你的名字</p>
+      <div id="join-members"></div>
+      <label for="join-new">名單上沒有你？</label>
+      <div class="row">
+        <input id="join-new" placeholder="輸入你的名字">
+        <button class="small-btn" onclick="joinAsNew()">加入</button>
+      </div>
     </div>
   </section>
 
@@ -236,15 +266,23 @@
   <!-- 頁面 4：設定 -->
   <section class="page" id="page-settings">
     <div class="card">
+      <h2>邀請旅伴</h2>
+      <p class="hint">把連結傳給旅伴，他們打開後點選自己的名字就能一起記帳。</p>
+      <div class="invite-link" id="invite-link"></div>
+      <button class="btn" onclick="shareInvite()">分享邀請連結</button>
+    </div>
+    <div class="card">
       <h2>旅伴</h2>
       <div class="chip-list" id="settings-members"></div>
+      <p class="hint">虛線框是還沒用手機加入的人，但你一樣可以幫他記帳。</p>
       <label for="new-member">加入新旅伴</label>
       <div class="row">
         <input id="new-member" placeholder="輸入名字">
         <button class="small-btn" onclick="addMemberLater()">加入</button>
       </div>
     </div>
-    <button class="btn danger" onclick="resetTrip()">刪除這趟旅程</button>
+    <button class="btn ghost" onclick="switchTrip()">切換／建立其他旅程</button>
+    <button class="btn danger" id="delete-trip-btn" onclick="deleteTrip()">刪除這趟旅程</button>
   </section>
 </main>
 
@@ -255,50 +293,72 @@
   <button data-page="page-settings" onclick="showPage('page-settings')"><span>⚙️</span>設定</button>
 </nav>
 
+<!-- Firebase SDK（compat 版本，跟一般 script 一樣用，不需要 import） -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
 <script>
 /* =========================================================
-   資料結構（刻意設計成跟之後 Firebase 一樣的形狀）
-   trip = {
-     id, name, baseCurrency, createdAt,
-     members: [ { id, name, uid } ]   ← uid 第四步接 Firebase 時用來綁定「誰是誰」
-   }
-   expenses = [ ... ]                  ← 第二步開始放資料
+   第四步：Firebase 雲端同步
+   ---------------------------------------------------------
+   ① 把下面的 firebaseConfig 換成你自己專案的設定
    ========================================================= */
-const STORAGE_KEY = 'travelSplit_v1';
+const firebaseConfig = {
+  apiKey: "AIzaSyCte5NjBlIL_dItwT2jsBkPgU8r1NT9ivI",
+  authDomain: "travel-expenses-7d1e7.firebaseapp.com",
+  projectId: "travel-expenses-7d1e7",
+  storageBucket: "travel-expenses-7d1e7.firebasestorage.app",
+  messagingSenderId: "667683798377",
+  appId: "1:667683798377:web:34e35f4876e8e0cbef51f8"
+};
+
+/* ---------------------------------------------------------
+   Firestore 裡的資料結構：
+   trips/{旅程id}
+     name, baseCurrency, createdAt, createdBy(建立者 uid)
+     members: [ { id, name, uid } ]   ← uid 是空的代表這個人還沒用手機加入
+     memberUids: [ uid, ... ]         ← 誰可以讀寫這趟旅程（安全規則會檢查）
+     rates: { USD: 32.5 }             ← 大家共用的最近匯率
+   trips/{旅程id}/expenses/{支出id}    ← 跟第二步的格式一樣
+   trips/{旅程id}/transfers/{還款id}   ← 跟第三步的格式一樣
+   --------------------------------------------------------- */
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+// 開啟離線快取：沒網路時照樣能記帳，有網路後自動上傳
+db.enablePersistence({ synchronizeTabs: true }).catch(e => console.warn('離線快取無法開啟', e.code));
+
+const CURRENT_TRIP_KEY = 'travelSplit_currentTrip';   // 這支手機上次打開的旅程
+const LAST_CURRENCY_KEY = 'travelSplit_lastCurrency';
+
+let myUid = null;
+let tripId = null;
 let trip = null;
 let expenses = [];
-let transfers = [];   // 第三步：已經還的錢 { id, fromId, toId, amount(結算幣), date, createdAt }
-let setupMembers = [];   // 建立旅程時暫存的名字
+let transfers = [];
+let setupMembers = [];
+let unsubscribers = [];   // 切換旅程時要停止監聽舊旅程
+let joinTrip = null;      // 加入流程中，正在看的旅程
 
-// 產生不重複 id（時間 + 亂數）
 function newId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
-
-// 防止名字裡有 < > 之類的字元破壞畫面
 function escapeHTML(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 }
+function tripRef(id = tripId) { return db.collection('trips').doc(id); }
 
-/* ---------- 存取 ---------- */
-function saveData() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ trip, expenses, transfers }));
-  } catch (e) {
-    alert('儲存失敗：' + e.message);
-  }
+// Firestore 寫入失敗時統一提示（例如權限不足）
+function onWriteError(e) {
+  console.error(e);
+  alert('雲端儲存失敗：' + (e.code || e.message));
 }
-function loadData() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
-    const data = JSON.parse(raw);
-    trip = data.trip || null;
-    expenses = data.expenses || [];
-    transfers = data.transfers || [];
-  } catch (e) {
-    console.error('讀取失敗', e);
-  }
+
+// 找出「我」是名單上的哪一位
+function myMember() {
+  return trip ? trip.members.find(m => m.uid === myUid) : null;
 }
 
 /* ---------- 換頁 ---------- */
@@ -308,6 +368,61 @@ function showPage(id) {
   if (id === 'page-settle') renderSettle();
   window.scrollTo(0, 0);
 }
+function setHeader(title, sub) {
+  document.getElementById('trip-title').textContent = title;
+  document.getElementById('trip-sub').textContent = sub + (navigator.onLine ? '' : '・離線中，連線後會自動同步');
+}
+
+/* =========================================================
+   啟動流程：登入 → 判斷要做什麼
+   ========================================================= */
+function startApp() {
+  setHeader('旅途分帳', '連線中…');
+  // 匿名登入：不用帳號密碼，Firebase 會給這支手機一個固定的 uid
+  auth.onAuthStateChanged(async user => {
+    if (!user) {
+      auth.signInAnonymously().catch(e => {
+        setHeader('旅途分帳', '無法連線');
+        alert('登入失敗：' + (e.code || e.message) + '\n第一次使用需要網路。');
+      });
+      return;
+    }
+    myUid = user.uid;
+    const joinId = new URLSearchParams(location.search).get('join');
+    if (joinId) {
+      history.replaceState(null, '', location.pathname);   // 把 ?join= 從網址拿掉
+      await openJoin(joinId);
+      return;
+    }
+    const saved = localStorage.getItem(CURRENT_TRIP_KEY);
+    if (saved) openTrip(saved);
+    else showTripPicker();
+  });
+}
+
+/* ---------- 旅程列表（沒有打開任何旅程時） ---------- */
+async function showTripPicker() {
+  stopListening();
+  tripId = null; trip = null; expenses = []; transfers = [];
+  localStorage.removeItem(CURRENT_TRIP_KEY);
+  document.getElementById('tabs').classList.remove('show');
+  setHeader('旅途分帳', '選擇或建立一趟旅程');
+  renderSetupMembers();
+  showPage('page-setup');
+  try {
+    // 查詢「我」參加的所有旅程
+    const snap = await db.collection('trips').where('memberUids', 'array-contains', myUid).get();
+    const list = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => b.createdAt - a.createdAt);
+    const card = document.getElementById('my-trips-card');
+    card.style.display = list.length ? 'block' : 'none';
+    document.getElementById('my-trips').innerHTML = list.map(t =>
+      `<button class="trip-item" onclick="openTrip('${t.id}')"><span>${escapeHTML(t.name)}</span>` +
+      `<small>${t.members.length} 人</small></button>`).join('');
+  } catch (e) {
+    console.error(e);
+  }
+}
+function switchTrip() { showTripPicker(); }
 
 /* ---------- 建立旅程 ---------- */
 function addSetupMember() {
@@ -333,69 +448,164 @@ function renderSetupMembers() {
 function createTrip() {
   const name = document.getElementById('setup-name').value.trim();
   if (!name) { alert('請輸入旅程名稱'); return; }
-  if (setupMembers.length < 2) { alert('分帳至少需要兩個人'); return; }
-  trip = {
-    id: newId(),
+  if (setupMembers.length < 1) { alert('請至少輸入你自己的名字'); return; }
+  const id = db.collection('trips').doc().id;   // Firestore 產生的隨機 id，別人猜不到
+  const data = {
     name,
     baseCurrency: document.getElementById('setup-currency').value,
     createdAt: Date.now(),
-    members: setupMembers.map(n => ({ id: newId(), name: n, uid: null }))
+    createdBy: myUid,
+    // 第一個人是自己，直接綁定 uid
+    members: setupMembers.map((n, i) => ({ id: newId(), name: n, uid: i === 0 ? myUid : null })),
+    memberUids: [myUid],
+    rates: {}
   };
-  expenses = [];
-  transfers = [];
+  tripRef(id).set(data).catch(onWriteError);
   setupMembers = [];
-  saveData();
-  render();
+  document.getElementById('setup-name').value = '';
+  openTrip(id);
+}
+
+/* ---------- 打開一趟旅程：開始即時監聽 ---------- */
+function stopListening() {
+  unsubscribers.forEach(fn => fn());
+  unsubscribers = [];
+}
+function openTrip(id) {
+  stopListening();
+  tripId = id;
+  trip = null; expenses = []; transfers = [];
+  localStorage.setItem(CURRENT_TRIP_KEY, id);
+  setHeader('旅途分帳', '讀取中…');
+
+  // onSnapshot：資料一有變動（自己或旅伴改的），就會自動呼叫這裡
+  unsubscribers.push(tripRef().onSnapshot(doc => {
+    if (!doc.exists) {
+      alert('找不到這趟旅程，可能已經被刪除');
+      showTripPicker();
+      return;
+    }
+    trip = doc.data();
+    render();
+  }, err => {
+    console.error(err);
+    alert('無法讀取這趟旅程：' + err.code);
+    showTripPicker();
+  }));
+
+  unsubscribers.push(tripRef().collection('expenses').onSnapshot(snap => {
+    expenses = snap.docs.map(d => d.data());
+    render();
+  }, console.error));
+
+  unsubscribers.push(tripRef().collection('transfers').onSnapshot(snap => {
+    transfers = snap.docs.map(d => d.data());
+    render();
+  }, console.error));
+}
+
+/* ---------- 加入旅程（打開邀請連結） ---------- */
+async function openJoin(id) {
+  try {
+    const doc = await tripRef(id).get();
+    if (!doc.exists) { alert('邀請連結無效或旅程已刪除'); showTripPicker(); return; }
+    const data = doc.data();
+    if (data.memberUids.includes(myUid)) { openTrip(id); return; }   // 已經加入過了
+    joinTrip = { id, ...data };
+    document.getElementById('tabs').classList.remove('show');
+    setHeader(data.name, '加入旅程');
+    document.getElementById('join-title').textContent = `加入「${data.name}」`;
+    document.getElementById('join-members').innerHTML = data.members.map(m =>
+      `<button class="join-pick" onclick="joinAs('${m.id}')">${escapeHTML(m.name)}` +
+      `${m.uid ? '<small>已有手機加入</small>' : ''}</button>`).join('');
+    showPage('page-join');
+  } catch (e) {
+    console.error(e);
+    alert('無法讀取邀請：' + (e.code || e.message));
+    showTripPicker();
+  }
+}
+// 認領名單上的名字
+function joinAs(memberId) {
+  const m = joinTrip.members.find(x => x.id === memberId);
+  // 已經被認領：可能是本人換了手機或清了瀏覽器資料，確認後讓他重新認領
+  if (m.uid && !confirm(`「${m.name}」已經有手機加入了。\n如果是你換了手機或清除過資料，按確定繼續。`)) return;
+  const members = joinTrip.members.map(x => x.id === memberId ? { ...x, uid: myUid } : x);
+  finishJoin(members);
+}
+// 名單上沒有自己：新增
+function joinAsNew() {
+  const name = document.getElementById('join-new').value.trim();
+  if (!name) return;
+  if (joinTrip.members.some(m => m.name === name)) { alert('名單上已經有這個名字，請直接點選'); return; }
+  finishJoin([...joinTrip.members, { id: newId(), name, uid: myUid }]);
+}
+function finishJoin(members) {
+  const id = joinTrip.id;
+  tripRef(id).update({
+    members,
+    memberUids: firebase.firestore.FieldValue.arrayUnion(myUid)
+  }).then(() => openTrip(id)).catch(onWriteError);
+  joinTrip = null;
 }
 
 /* ---------- 設定頁 ---------- */
+function inviteUrl() {
+  return location.origin + location.pathname + '?join=' + tripId;
+}
+async function shareInvite() {
+  const url = inviteUrl();
+  const text = `一起用「旅途分帳」記「${trip.name}」的帳：`;
+  try {
+    if (navigator.share) await navigator.share({ text, url });
+    else { await navigator.clipboard.writeText(text + url); alert('已複製邀請連結'); }
+  } catch (e) {
+    if (e.name !== 'AbortError') prompt('請手動複製：', url);
+  }
+}
 function addMemberLater() {
   const input = document.getElementById('new-member');
   const name = input.value.trim();
   if (!name) return;
   if (trip.members.some(m => m.name === name)) { alert('這個名字已經在旅程裡了'); return; }
-  trip.members.push({ id: newId(), name, uid: null });
+  const members = [...trip.members, { id: newId(), name, uid: null }];
+  tripRef().update({ members }).catch(onWriteError);
   input.value = '';
-  saveData();
-  render();
 }
-function resetTrip() {
-  if (!confirm(`確定要刪除「${trip.name}」和所有支出嗎？無法復原。`)) return;
-  trip = null;
-  expenses = [];
-  transfers = [];
-  saveData();
-  render();
+async function deleteTrip() {
+  if (!confirm(`確定要刪除「${trip.name}」和所有支出嗎？所有旅伴都會看不到，無法復原。`)) return;
+  // Firestore 刪掉旅程不會自動刪掉裡面的支出，所以要一起刪
+  const batch = db.batch();
+  expenses.forEach(e => batch.delete(tripRef().collection('expenses').doc(e.id)));
+  transfers.forEach(t => batch.delete(tripRef().collection('transfers').doc(t.id)));
+  batch.delete(tripRef());
+  const id = tripId;
+  showTripPicker();
+  batch.commit().catch(onWriteError);
 }
 
 /* ---------- 畫面更新（資料變動後都呼叫這個） ---------- */
 function render() {
-  const tabs = document.getElementById('tabs');
-  if (!trip) {
-    document.getElementById('trip-title').textContent = '旅途分帳';
-    document.getElementById('trip-sub').textContent = '建立一趟旅程開始記帳';
-    tabs.classList.remove('show');
-    renderSetupMembers();
-    showPage('page-setup');
-    return;
-  }
-  document.getElementById('trip-title').textContent = trip.name;
-  document.getElementById('trip-sub').textContent =
-    `${trip.members.length} 人同行，以 ${trip.baseCurrency} 結算`;
-  document.getElementById('settings-members').innerHTML = trip.members.map((m, i) =>
-    `<span class="chip ${i === 0 ? 'me' : ''}">${escapeHTML(m.name)}</span>`
+  if (!trip) return;
+  const me = myMember();
+  setHeader(trip.name, `${trip.members.length} 人同行，以 ${trip.baseCurrency} 結算` + (me ? `・我是 ${me.name}` : ''));
+
+  document.getElementById('settings-members').innerHTML = trip.members.map(m =>
+    `<span class="chip ${m.uid === myUid ? 'me' : m.uid ? '' : 'pending'}">${escapeHTML(m.name)}${m.uid === myUid ? '（我）' : ''}</span>`
   ).join('');
-  tabs.classList.add('show');
+  document.getElementById('invite-link').textContent = inviteUrl();
+  document.getElementById('delete-trip-btn').style.display = trip.createdBy === myUid ? 'block' : 'none';
+
+  document.getElementById('tabs').classList.add('show');
   renderList();
-  // 目前在設定頁就留在設定頁，否則回到支出列表
   const current = document.querySelector('.page.active');
-  if (!current || current.id === 'page-setup') showPage('page-list');
+  if (!current || current.id === 'page-setup' || current.id === 'page-join') showPage('page-list');
+  else if (current.id === 'page-settle') renderSettle();
 }
 
-// 輸入名字後按鍵盤的 Enter 也能加入
-document.getElementById('setup-member').addEventListener('keydown', e => { if (e.key === 'Enter') addSetupMember(); });
-document.getElementById('new-member').addEventListener('keydown', e => { if (e.key === 'Enter') addMemberLater(); });
-
+// 網路斷線／恢復時更新頁首
+window.addEventListener('online', () => trip && render());
+window.addEventListener('offline', () => trip && render());
 
 /* =========================================================
    第二步：新增支出
@@ -493,12 +703,12 @@ function memberName(id) {
 
 /* ---------- 開啟表單 ---------- */
 function openAddForm() {
-  const lastCurrency = trip.lastCurrency || trip.baseCurrency;
+  const lastCurrency = localStorage.getItem(LAST_CURRENCY_KEY) || trip.baseCurrency;
   draft = {
     editingId: null,
     currency: lastCurrency,
     category: 'food',
-    payerId: trip.members[0].id,
+    payerId: (myMember() || trip.members[0]).id,   // 預設是自己付的
     participants: trip.members.map(m => m.id),   // 預設全員分攤
     splitType: 'equal',
     customText: {}                                // 自訂金額的輸入文字
@@ -695,30 +905,28 @@ function saveExpense() {
     updatedAt: now
   };
 
+  const col = tripRef().collection('expenses');
   if (draft.editingId) {
-    const e = expenses.find(x => x.id === draft.editingId);
-    Object.assign(e, data);
+    // update 只改這些欄位，保留 createdAt、createdBy
+    col.doc(draft.editingId).update(data).catch(onWriteError);
   } else {
-    expenses.push({ id: newId(), createdAt: now, ...data });
+    const id = newId();
+    col.doc(id).set({ id, createdAt: now, createdBy: myUid, ...data }).catch(onWriteError);
   }
 
-  // 記住這次的幣別和匯率，下次自動帶入
-  trip.lastCurrency = cur;
-  if (cur !== base) {
-    trip.rates = trip.rates || {};
-    trip.rates[cur] = rate;
+  // 記住這次的幣別（只存在這支手機）和匯率（旅伴共用）
+  localStorage.setItem(LAST_CURRENCY_KEY, cur);
+  if (cur !== base && (trip.rates || {})[cur] !== rate) {
+    tripRef().update({ ['rates.' + cur]: rate }).catch(onWriteError);
   }
-  saveData();
-  renderList();
+  // 不用等雲端回應：有離線快取，畫面會立刻更新；沒網路時也不會卡住
   showPage('page-list');
 }
 
 function deleteExpense() {
   if (!draft.editingId) return;
   if (!confirm('確定刪除這筆支出？')) return;
-  expenses = expenses.filter(x => x.id !== draft.editingId);
-  saveData();
-  renderList();
+  tripRef().collection('expenses').doc(draft.editingId).delete().catch(onWriteError);
   showPage('page-list');
 }
 
@@ -873,16 +1081,15 @@ function markPaid(i) {
   if (!t) return;
   const msg = `確認 ${memberName(t.fromId)} 已經給 ${memberName(t.toId)} ${formatAmount(t.amount, trip.baseCurrency)}？`;
   if (!confirm(msg)) return;
-  transfers.push({ id: newId(), fromId: t.fromId, toId: t.toId, amount: t.amount, date: todayStr(), createdAt: Date.now() });
-  saveData();
-  renderSettle();
+  const id = newId();
+  tripRef().collection('transfers').doc(id)
+    .set({ id, fromId: t.fromId, toId: t.toId, amount: t.amount, date: todayStr(), createdAt: Date.now(), createdBy: myUid })
+    .catch(onWriteError);
 }
 
 function undoPaid(id) {
   if (!confirm('取消這筆還款紀錄？')) return;
-  transfers = transfers.filter(t => t.id !== id);
-  saveData();
-  renderSettle();
+  tripRef().collection('transfers').doc(id).delete().catch(onWriteError);
 }
 
 // 產生一段文字，可以直接貼到 LINE 群組
@@ -910,8 +1117,7 @@ async function shareSettle() {
 }
 
 /* ---------- 啟動（永遠放在 script 最後面，所有變數和函式都定義好之後才執行） ---------- */
-loadData();
-render();
+startApp();
 </script>
 </body>
 </html>

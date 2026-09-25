@@ -404,13 +404,20 @@
 
       <!-- ── 付 ── -->
       <div class="form-sec">付</div>
-      <label>誰付的</label>
+      <label>這筆是</label>
+      <div class="seg" style="margin-top:0">
+        <button id="kind-shared" onclick="setPersonal(false)">👥 共同開銷</button>
+        <button id="kind-personal" onclick="setPersonal(true)">👤 個人開銷</button>
+      </div>
+      <div class="hint" id="kind-hint"></div>
+      <label id="payer-label">誰付的</label>
       <div class="pick-list" id="f-payer"></div>
       <label>用什麼付</label>
       <div class="pick-list" id="f-method"></div>
       <input id="f-method-other" placeholder="例如：Apple Pay、悠遊卡、旅遊卡" style="display:none;margin-top:8px">
 
-      <!-- ── 分 ── -->
+      <!-- ── 分 ──（個人開銷時隱藏） -->
+      <div id="split-sec">
       <div class="form-sec">分</div>
       <label id="participants-label">誰要分</label>
       <div class="pick-list" id="f-participants"></div>
@@ -421,6 +428,7 @@
       </div>
       <div class="hint" id="split-hint"></div>
       <div id="split-detail"></div>
+      </div>
 
       <!-- ── 還 ──（各自付時隱藏：沒有人欠錢） -->
       <div id="repay-sec">
@@ -1110,6 +1118,7 @@ function openAddForm() {
     category: 'food',
     payerId: (myMember() || trip.members[0]).id,   // 預設是自己付的
     participants: trip.members.map(m => m.id),   // 預設全員分攤
+    personal: false,                              // 個人開銷
     selfPay: false,                               // 各自付
     splitMode: 'equal',                           // 怎麼分：equal 平均／custom 自訂金額
     customText: {},                               // 自訂金額的輸入文字
@@ -1141,8 +1150,10 @@ function openEditForm(id) {
     currency: e.currency,
     category: e.category,
     payerId: e.payerId || (myMember() || trip.members[0]).id,
-    participants: Object.keys(e.shares),
-    selfPay: e.splitType === 'self',
+    // 個人開銷：分攤對象預設回全員，之後改成共同開銷時比較方便
+    participants: isPersonal(e) ? trip.members.map(m => m.id) : Object.keys(e.shares),
+    personal: isPersonal(e),
+    selfPay: e.splitType === 'self' && !isPersonal(e),
     // 舊資料的各付各的沒有 splitMode，都是自訂金額
     splitMode: e.splitType === 'self' ? (e.splitMode || 'custom') : e.splitType,
     customText: {},
@@ -1186,7 +1197,13 @@ function buildForm() {
 
   document.getElementById('f-payer').innerHTML = trip.members.map(m =>
     `<button class="pick ${!draft.selfPay && m.id === draft.payerId ? 'on' : ''}" onclick="setPayer('${m.id}')">${escapeHTML(m.name)}</button>`).join('') +
-    `<button class="pick ${draft.selfPay ? 'on' : ''}" onclick="setPayer(null)">👥 各自付</button>`;
+    (draft.personal ? '' : `<button class="pick ${draft.selfPay ? 'on' : ''}" onclick="setPayer(null)">👥 各自付</button>`);
+  // 個人開銷：只需要「誰的」和「用什麼付」
+  document.getElementById('kind-shared').classList.toggle('on', !draft.personal);
+  document.getElementById('kind-personal').classList.toggle('on', draft.personal);
+  document.getElementById('kind-hint').textContent = draft.personal ? '只記在這個人名下，不分攤，也不算進旅程總花費' : '';
+  document.getElementById('payer-label').textContent = draft.personal ? '誰的開銷' : '誰付的';
+  document.getElementById('split-sec').style.display = draft.personal ? 'none' : 'block';
 
   document.getElementById('f-participants').innerHTML = trip.members.map(m =>
     `<button class="pick ${draft.participants.includes(m.id) ? 'on' : ''}" onclick="toggleParticipant('${m.id}')">${escapeHTML(m.name)}</button>`).join('');
@@ -1195,7 +1212,7 @@ function buildForm() {
   document.getElementById('seg-custom').classList.toggle('on', draft.splitMode === 'custom');
   document.getElementById('split-hint').textContent = draft.selfPay ? '每個人自己付自己那份，不會產生欠款' : '';
   document.getElementById('participants-label').textContent = draft.selfPay ? '有誰參加' : '誰要分';
-  document.getElementById('repay-sec').style.display = draft.selfPay ? 'none' : 'block';
+  document.getElementById('repay-sec').style.display = (draft.selfPay || draft.personal) ? 'none' : 'block';
   updateForm();
 }
 
@@ -1218,6 +1235,12 @@ function toggleParticipant(id) {
 
 function setSplitMode(m) {
   draft.splitMode = m;
+  buildForm();
+}
+
+function setPersonal(v) {
+  draft.personal = v;
+  if (v) draft.selfPay = false;
   buildForm();
 }
 
@@ -1299,12 +1322,19 @@ function saveExpense() {
     CATEGORIES.find(c => c.id === draft.category).name;
   const date = document.getElementById('f-date').value || todayStr();
 
-  const ids = draft.participants;
-  if (ids.length === 0) { alert('請至少選一個分攤的人'); return; }
+  let ids = draft.participants;
+  let personal = draft.personal;
+  if (!personal && ids.length === 0) { alert('請至少選一個分攤的人'); return; }
+  // 只有一個人分攤（付款人自己，或各自付只有一個人）＝ 個人開銷，統一存成同一種
+  if (!personal && ids.length === 1 && (draft.selfPay || ids[0] === draft.payerId)) personal = true;
+  const owner = personal ? (draft.personal ? draft.payerId : ids[0]) : null;
 
   // 算出每人分攤的原幣金額
   let parts;
-  if (draft.splitMode === 'equal') {
+  if (personal) {
+    ids = [owner];
+    parts = [amount];
+  } else if (draft.splitMode === 'equal') {
     parts = allocate(amount, ids.map(() => 1));
   } else {
     parts = ids.map(id => parseAmount(draft.customText[id] || '0', cur));
@@ -1333,10 +1363,10 @@ function saveExpense() {
     photoIds: draft.photos.map(p => p.id),
     currency: cur, amount,
     rate: null, baseAmount: null, baseShares: null,   // 舊版的換算欄位，不再使用
-    payerId: draft.selfPay ? null : draft.payerId,
+    payerId: personal ? owner : (draft.selfPay ? null : draft.payerId),
     paymentMethod: draft.method,
     paymentMethodOther: draft.method === 'other' ? document.getElementById('f-method-other').value.trim() : '',
-    splitType: draft.selfPay ? 'self' : draft.splitMode,   // equal / custom / self（各自付）
+    splitType: personal ? 'personal' : (draft.selfPay ? 'self' : draft.splitMode),   // equal / custom / self（各自付）/ personal（個人開銷）
     splitMode: draft.splitMode,                              // 各自付時用平均還是自訂金額
     shares,
     v: 2,   // 資料格式版本：金額統一存到小數點後兩位
@@ -1374,6 +1404,14 @@ function deleteExpense() {
 }
 
 /* ---------- 支出列表 ---------- */
+// 個人開銷：新版存成 personal；舊資料只有一個人分攤、而且是付款人自己（或各付各的只有一人）也算
+function isPersonal(e) {
+  if (e.splitType === 'personal') return true;
+  const ids = Object.keys(e.shares || {});
+  return ids.length === 1 && (e.splitType === 'self' || ids[0] === e.payerId);
+}
+function personalOwner(e) { return e.payerId || Object.keys(e.shares)[0]; }
+
 // 加總：各幣別分開加，例如「NT$12,340 ＋ US$450.00」
 function sumExpenses(list) {
   const byCur = {};
@@ -1390,7 +1428,8 @@ function renderList() {
     return;
   }
   const base = trip.baseCurrency;
-  const sum = sumExpenses(expenses);
+  const sum = sumExpenses(expenses.filter(e => !isPersonal(e)));   // 旅程總花費不含個人開銷
+  const personalSum = sumExpenses(expenses.filter(isPersonal));
 
   // 新的日期在上面；同一天內新的在上面
   const sorted = [...expenses].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
@@ -1398,16 +1437,22 @@ function renderList() {
   sorted.forEach(e => { (groups[e.date] = groups[e.date] || []).push(e); });
 
   let html = `<div class="total-bar"><span>旅程總花費</span><strong style="text-align:right">${sum.text}</strong></div>`;
+  if (Object.keys(personalSum.byCur).length) {
+    html += `<div class="hint" style="text-align:right;margin:6px 4px 0">另有個人開銷 ${personalSum.text}（不算在總花費內）</div>`;
+  }
   for (const [date, list] of Object.entries(groups)) {
     const [y, m, d] = date.split('-');
-    html += `<div class="day-head"><span>${Number(m)}/${Number(d)}</span><span>${sumExpenses(list).text}</span></div>`;
+    const shared = list.filter(e => !isPersonal(e));
+    const own = list.filter(isPersonal);
+    const dayText = [shared.length ? sumExpenses(shared).text : '', own.length ? `個人 ${sumExpenses(own).text}` : ''].filter(Boolean).join('・');
+    html += `<div class="day-head"><span>${Number(m)}/${Number(d)}</span><span>${dayText}</span></div>`;
     html += list.map(e => {
       const cat = CATEGORIES.find(c => c.id === e.category) || CATEGORIES[5];
       const n = Object.keys(e.shares).length;
       return `<button class="exp" onclick="openEditForm('${e.id}')">
         <span class="icon">${cat.icon}</span>
         <span class="mid"><div class="title">${escapeHTML(e.title)}</div>
-          <div class="who">${e.splitType === 'self' ? `各付各的${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}・${n} 人` : `${escapeHTML(memberName(e.payerId))} 付款${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}・${n} 人分攤`}${isFullySettled(e) ? '・<span class="settled-tag">✓已結清</span>' : ''}${e.note ? '・📝' : ''}${(e.photoIds || []).length ? `・📷${e.photoIds.length}` : ''}</div></span>
+          <div class="who">${isPersonal(e) ? `${escapeHTML(memberName(personalOwner(e)))} 個人${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}` : e.splitType === 'self' ? `各付各的${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}・${n} 人` : `${escapeHTML(memberName(e.payerId))} 付款${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}・${n} 人分攤`}${isFullySettled(e) ? '・<span class="settled-tag">✓已結清</span>' : ''}${e.note ? '・📝' : ''}${(e.photoIds || []).length ? `・📷${e.photoIds.length}` : ''}</div></span>
         <span class="money">${formatAmount(e.amount, e.currency)}</span>
       </button>`;
     }).join('');
@@ -1431,15 +1476,15 @@ function renderList() {
 const openSections = {};   // 收合區塊目前是開還是關（畫面更新時保持原狀）
 
 // 這趟旅程用到的貨幣，結算幣別排第一
-function tripCurrencies() {
+function tripCurrencies(source = expenses) {
   const list = [];
-  [...expenses].sort((a, b) => a.date.localeCompare(b.date)).forEach(e => { if (!list.includes(e.currency)) list.push(e.currency); });
+  [...source].sort((a, b) => a.date.localeCompare(b.date)).forEach(e => { if (!list.includes(e.currency)) list.push(e.currency); });
   return list.sort((x, y) => (y === trip.baseCurrency) - (x === trip.baseCurrency));
 }
 
 // 一筆支出裡，誰欠付款人多少（原幣）
 function expenseDebts(e) {
-  if (e.splitType === 'self' || !e.payerId) return [];
+  if (e.splitType === 'self' || !e.payerId || isPersonal(e)) return [];
   return Object.entries(e.shares)
     .filter(([id, v]) => id !== e.payerId && v > 0)
     .map(([id, v]) => ({ fromId: id, toId: e.payerId, amount: v, currency: e.currency }));
@@ -1487,10 +1532,11 @@ function spendingByPerson() {
   const r = {};
   const add = (id, c, field, v) => {
     r[id] = r[id] || {};
-    r[id][c] = r[id][c] || { paid: 0, spent: 0 };
+    r[id][c] = r[id][c] || { paid: 0, spent: 0, personal: 0 };
     r[id][c][field] += v;
   };
   for (const e of expenses) {
+    if (isPersonal(e)) { add(personalOwner(e), e.currency, 'personal', e.amount); continue; }
     for (const [id, v] of Object.entries(e.shares)) {
       add(id, e.currency, 'spent', v);
       if (e.splitType === 'self') add(id, e.currency, 'paid', v);
@@ -1515,14 +1561,19 @@ function renderSettle() {
     box.innerHTML = '<div class="empty"><strong>還沒有支出可以結算</strong>先記幾筆帳再回來看</div>';
     return;
   }
-  let html = tripCurrencies().map(renderCurrencyBlock).join('');
+  const sharedExp = expenses.filter(e => !isPersonal(e));
+  if (!sharedExp.length) {
+    box.innerHTML = '<div class="empty"><strong>沒有共同開銷</strong>目前只有個人開銷，不需要結算</div>';
+    return;
+  }
+  let html = tripCurrencies(sharedExp).map(renderCurrencyBlock).join('');
   if (transfers.length) html += `<div class="card" style="padding-top:2px">${section('history', '已還款紀錄', `${transfers.length} 筆`, renderHistory(), false)}</div>`;
   html += '<button class="btn ghost" onclick="shareSettle()">分享結算結果</button>';
   box.innerHTML = html;
 }
 
 function renderCurrencyBlock(c) {
-  const list = expenses.filter(e => e.currency === c);
+  const list = expenses.filter(e => e.currency === c && !isPersonal(e));
   const total = list.reduce((a, e) => a + e.amount, 0);
   const pairs = pairSummary(c);
 
@@ -1574,8 +1625,10 @@ function renderSpending() {
     const mine = sp[m.id] || {};
     const paid = curs.filter(c => mine[c] && mine[c].paid).map(c => formatAmount(mine[c].paid, c)).join(' ＋ ') || '0';
     const spent = curs.filter(c => mine[c] && mine[c].spent).map(c => formatAmount(mine[c].spent, c)).join(' ＋ ') || '0';
+    const own = curs.filter(c => mine[c] && mine[c].personal).map(c => formatAmount(mine[c].personal, c)).join(' ＋ ');
     return `<div class="bal"><div><div class="name">${escapeHTML(m.name)}</div>
-      <div class="detail">付了 ${paid}</div><div class="detail">實際花費 ${spent}</div></div></div>`;
+      <div class="detail">共同開銷：付了 ${paid}・分攤 ${spent}</div>
+      ${own ? `<div class="detail">個人開銷：${own}</div>` : ''}</div></div>`;
   }).join('');
 }
 
@@ -1602,8 +1655,9 @@ function undoPaid(id) {
 
 // 產生一段文字，可以直接貼到 LINE 群組
 async function shareSettle() {
-  const curs = tripCurrencies();
-  let text = `【${trip.name}】結算\n總花費 ${sumExpenses(expenses).text}\n`;
+  const shared = expenses.filter(e => !isPersonal(e));
+  const curs = tripCurrencies(shared);
+  let text = `【${trip.name}】結算\n旅程總花費 ${sumExpenses(shared).text}\n`;
   for (const c of curs) {
     const pairs = pairSummary(c).filter(p => p.amount > 0);
     text += `\n〔${CURRENCIES[c].name} ${c}〕\n`;
@@ -1613,9 +1667,12 @@ async function shareSettle() {
     text += '\n';
   }
   const sp = spendingByPerson();
-  text += '\n每人實際花費：\n' + trip.members.map(m => {
+  const allCurs = tripCurrencies();
+  text += '\n每人分攤的共同開銷：\n' + trip.members.map(m => {
     const mine = sp[m.id] || {};
-    return `${m.name} ` + (curs.filter(c => mine[c] && mine[c].spent).map(c => formatAmount(mine[c].spent, c)).join(' ＋ ') || '0');
+    const own = allCurs.filter(c => mine[c] && mine[c].personal).map(c => formatAmount(mine[c].personal, c)).join(' ＋ ');
+    return `${m.name} ` + (curs.filter(c => mine[c] && mine[c].spent).map(c => formatAmount(mine[c].spent, c)).join(' ＋ ') || '0') +
+      (own ? `（另有個人開銷 ${own}）` : '');
   }).join('\n');
 
   try {
@@ -2069,7 +2126,7 @@ async function logout() {
    一直卡在「連線中」時，畫面上會顯示可能原因、錯誤訊息和版本，
    截圖給別人看就能判斷問題出在哪裡。
    ========================================================= */
-const APP_VERSION = '2026-09-25 表單付分還';   // 每次改版更新，用來確認上傳的是不是最新檔案
+const APP_VERSION = '2026-09-25 個人開銷';   // 每次改版更新，用來確認上傳的是不是最新檔案
 let authResolved = false;
 const diagErrors = [];
 
@@ -2456,6 +2513,67 @@ function pickFormRepay(id, method) {
   const st = draft.repay[id];
   st.method = st.method === method ? null : method;   // 再點一次 = 取消
   renderFormRepay();
+}
+
+/* =========================================================
+   統計
+   ---------------------------------------------------------
+   全部用已經記下的支出算，不需要另外輸入。各幣別分開，不互相換算。
+   ========================================================= */
+// 一組橫條：rows = [{ label, value }]，長度依最大值比例
+function barRows(rows, currency) {
+  const total = rows.reduce((a, r) => a + r.value, 0);
+  const max = Math.max(...rows.map(r => r.value), 1);
+  return rows.map(r => `<div class="stat-row">
+      <span>${r.label}</span>
+      <span class="bar"><span style="width:${Math.max(2, r.value / max * 100)}%"></span></span>
+      <span class="val">${formatAmount(r.value, currency)}<small>${total ? Math.round(r.value / total * 100) : 0}%</small></span>
+    </div>`).join('');
+}
+
+function renderStats() {
+  const box = document.getElementById('stats-box');
+  if (!trip) return;
+  if (!expenses.length) {
+    box.innerHTML = '<div class="empty"><strong>還沒有支出</strong>記幾筆帳之後，這裡會顯示花費統計</div>';
+    return;
+  }
+  let html = '';
+  const sharedAll = expenses.filter(e => !isPersonal(e));
+  for (const c of tripCurrencies(sharedAll)) {
+    const list = sharedAll.filter(e => e.currency === c);
+    const total = list.reduce((a, e) => a + e.amount, 0);
+
+    // 分類
+    const byCat = CATEGORIES.map(cat => ({
+      label: `${cat.icon} ${cat.name}`,
+      value: list.filter(e => (e.category || 'other') === cat.id).reduce((a, e) => a + e.amount, 0)
+    })).filter(r => r.value).sort((a, b) => b.value - a.value);
+
+    // 每日（依日期排序）
+    const days = {};
+    list.forEach(e => { days[e.date] = (days[e.date] || 0) + e.amount; });
+    const byDay = Object.keys(days).sort().map(d => {
+      const [, m, dd] = d.split('-');
+      return { label: `${Number(m)}/${Number(dd)}`, value: days[d] };
+    });
+
+    // 付款方式
+    const byMethod = [...PAY_METHODS.map(m => ({ id: m.id, label: `${m.icon} ${m.name}` })), { id: null, label: '未填' }]
+      .map(m => ({ label: m.label, value: list.filter(e => (e.paymentMethod || null) === m.id).reduce((a, e) => a + e.amount, 0) }))
+      .filter(r => r.value);
+
+    html += `<div class="card">
+      <div class="block-head"><h2>${CURRENCIES[c].name} ${c}</h2><span>共同開銷 <b>${formatAmount(total, c)}</b></span></div>
+      ${section('cat-' + c, '分類', '', barRows(byCat, c), true)}
+      ${section('day-' + c, '每日', `${byDay.length} 天`, barRows(byDay, c), true)}
+      ${section('pm-' + c, '付款方式', '', barRows(byMethod, c) +
+        (byMethod.some(r => r.label.includes('信用卡')) ? '<p class="hint">收到信用卡帳單時，可以用刷卡總額核對</p>' : ''), false)}
+    </div>`;
+  }
+  html += `<div class="card"><h2>每人花費</h2>${renderSpending()}
+    <p class="hint">以上各幣別分開計算。個人開銷不算進上方的分類、每日統計。</p></div>`;
+  box.innerHTML = html;
 }
 
 /* ---------- 啟動（永遠放在 script 最後面，所有變數和函式都定義好之後才執行） ---------- */

@@ -258,6 +258,21 @@
   .item-debt .done-btn { border: 1px solid var(--plus); color: var(--plus); }
   .item-debt .undo-btn { border: 1px solid var(--line); color: var(--muted); }
   .settled-tag { color: var(--plus); }
+
+  /* ===== 還款方式 ===== */
+  .sheet { position: fixed; inset: 0; z-index: 55; display: none; }
+  .sheet.show { display: block; }
+  .sheet-panel {
+    position: absolute; left: 0; right: 0; bottom: 0; max-width: 560px; margin: 0 auto;
+    background: #fff; border-radius: 16px 16px 0 0;
+    padding: 18px 16px calc(env(safe-area-inset-bottom, 0px) + 16px);
+    box-shadow: 0 -4px 20px rgba(27, 42, 65, .15);
+  }
+  .sheet-panel h2 { margin-bottom: 4px; }
+  .sheet-panel .big { font-size: 18px; margin: 6px 0 4px; }
+  .sheet-panel .row2 { display: flex; gap: 10px; margin-top: 16px; }
+  .sheet-panel .row2 .btn { margin-top: 0; }
+  .method-link { border: 0; background: none; padding: 2px 0; color: var(--stamp); font-size: 14px; text-align: left; }
 </style>
 </head>
 <body>
@@ -374,9 +389,14 @@
         <label>誰付的錢</label>
         <div class="pick-list" id="f-payer"></div>
         <label class="check-row">
-          <input type="checkbox" id="f-settled">
+          <input type="checkbox" id="f-settled" onchange="renderFormRepay()">
           <span>當場已結清<small id="f-settled-hint">其他人已經把自己那份還給付款人，結算時不會再出現這筆欠款</small></span>
         </label>
+        <div id="f-repay-box" style="display:none">
+          <label>還款方式</label>
+          <div class="pick-list" id="f-repay-methods"></div>
+          <input id="f-repay-other" placeholder="例如：LINE Pay、美金現金" style="display:none;margin-top:8px">
+        </div>
       </div>
 
       <label>付款方式</label>
@@ -437,6 +457,22 @@
   <button data-page="page-settle" onclick="showPage('page-settle')"><span>⚖️</span>結算</button>
   <button data-page="page-settings" onclick="showPage('page-settings')"><span>⚙️</span>設定</button>
 </nav>
+
+<!-- 確認還款／修改還款方式 -->
+<div class="sheet" id="repay-sheet">
+  <div class="calc-backdrop" onclick="closeRepaySheet()"></div>
+  <div class="sheet-panel" role="dialog" aria-label="還款">
+    <h2 id="repay-title">確認已還款</h2>
+    <div class="big" id="repay-desc"></div>
+    <label>還款方式（可不選）</label>
+    <div class="pick-list" id="repay-methods"></div>
+    <input id="repay-other" placeholder="例如：LINE Pay、美金現金" style="display:none;margin-top:8px">
+    <div class="row2">
+      <button class="btn ghost" onclick="closeRepaySheet()">取消</button>
+      <button class="btn" id="repay-ok" onclick="confirmRepaySheet()">確定</button>
+    </div>
+  </div>
+</div>
 
 <!-- 全螢幕看照片 -->
 <div class="viewer" id="photo-viewer" onclick="closeViewer()">
@@ -969,6 +1005,9 @@ function openAddForm() {
   draft.rateMode = localStorage.getItem(RATE_MODE_KEY) || 'now';
   draft.method = localStorage.getItem(METHOD_KEY) || null;
   draft.settledBefore = [];   // 編輯前，這筆支出已經還款的人
+  draft.repayMethod = localStorage.getItem(REPAY_METHOD_KEY) || null;
+  document.getElementById('f-repay-other').value = localStorage.getItem(REPAY_OTHER_KEY) || '';
+  renderFormRepay();
   document.getElementById('f-settled').checked = false;
   document.getElementById('f-settled-hint').textContent = '其他人已經把自己那份還給付款人，結算時不會再出現這筆欠款';
   document.getElementById('f-method-other').value = localStorage.getItem(METHOD_OTHER_KEY) || '';
@@ -1009,12 +1048,16 @@ function openEditForm(id) {
   draft.rateMode = (e.currency !== trip.baseCurrency && e.rate == null) ? 'later' : 'now';
   draft.method = e.paymentMethod || null;
   const debtors = expenseDebts(e).map(d => d.fromId);
-  draft.settledBefore = transfers.filter(t => t.expenseId === e.id).map(t => t.fromId);
+  const linked = transfers.filter(t => t.expenseId === e.id);
+  draft.settledBefore = linked.map(t => t.fromId);
+  draft.repayMethod = linked.length ? (linked[0].method || null) : (localStorage.getItem(REPAY_METHOD_KEY) || null);
+  document.getElementById('f-repay-other').value = linked.length ? (linked[0].methodOther || '') : (localStorage.getItem(REPAY_OTHER_KEY) || '');
   const allPaid = debtors.length > 0 && debtors.every(id => draft.settledBefore.includes(id));
   document.getElementById('f-settled').checked = allPaid;
   document.getElementById('f-settled-hint').textContent = (!allPaid && draft.settledBefore.length)
     ? `目前已還：${draft.settledBefore.map(memberName).join('、')}。勾選代表全部的人都還了`
     : '其他人已經把自己那份還給付款人，結算時不會再出現這筆欠款';
+  renderFormRepay();
   document.getElementById('f-method-other').value = e.paymentMethodOther || '';
   setRateSource('');
   document.getElementById('save-btn').textContent = '儲存修改';
@@ -1052,6 +1095,7 @@ function buildForm() {
   }[t];
   document.getElementById('payer-box').style.display = t === 'self' ? 'none' : 'block';
   document.getElementById('participants-label').textContent = t === 'self' ? '有誰參加' : '誰要分攤';
+  renderFormRepay();
   updateForm();
 }
 
@@ -1239,7 +1283,10 @@ function saveExpense() {
   }
 
   // 同步這筆支出的逐筆還款紀錄
-  syncExpenseRepayments({ id: expId, ...data }, document.getElementById('f-settled').checked, draft.settledBefore);
+  const repayOther = draft.repayMethod === 'other' ? document.getElementById('f-repay-other').value.trim() : '';
+  syncExpenseRepayments({ id: expId, ...data }, document.getElementById('f-settled').checked, draft.settledBefore,
+    draft.repayMethod, repayOther);
+  if (document.getElementById('f-settled').checked) rememberRepayMethod(draft.repayMethod, repayOther);
 
   // 記住這次的幣別（只存在這支手機）和匯率（旅伴共用）
   localStorage.setItem(LAST_CURRENCY_KEY, cur);
@@ -1476,7 +1523,8 @@ function renderSettle() {
     html += [...transfers].sort((a, b) => b.createdAt - a.createdAt).map(t => `<div class="transfer paid">
       <div class="flow">${escapeHTML(memberName(t.fromId))} 給 ${escapeHTML(memberName(t.toId))}
         <span class="amt">${formatAmount(t.amount, t.currency)}</span>
-        <span class="detail">${t.date}${t.expenseId ? `・${escapeHTML((expenses.find(e => e.id === t.expenseId) || {}).title || '')}` : ''}</span></div>
+        <span class="detail">${t.date}${t.expenseId ? `・${escapeHTML((expenses.find(e => e.id === t.expenseId) || {}).title || '')}` : ''}</span>
+        <button class="method-link" onclick="editRepayMethod('${t.id}')">${repayLabel(t) ? escapeHTML(repayLabel(t)) + ' ✎' : '＋ 還款方式'}</button></div>
       <button class="undo-btn" onclick="undoPaid('${t.id}')">取消</button>
     </div>`).join('');
     html += '</div>';
@@ -1493,12 +1541,17 @@ function markPaid(currency, i) {
   if (!group) return;
   const t = computeTransfers(computeBalances(group))[i];
   if (!t) return;
-  const msg = `確認 ${memberName(t.fromId)} 已經給 ${memberName(t.toId)} ${formatAmount(t.amount, currency)}？`;
-  if (!confirm(msg)) return;
-  const id = newId();
-  tripRef().collection('transfers').doc(id)
-    .set({ id, fromId: t.fromId, toId: t.toId, amount: t.amount, currency, date: todayStr(), createdAt: Date.now(), createdBy: myUid, v: 2 })
-    .catch(onWriteError);
+  openRepaySheet({
+    title: '確認已還款',
+    desc: `${memberName(t.fromId)} 已經給 ${memberName(t.toId)} ${formatAmount(t.amount, currency)}`,
+    onConfirm: (method, methodOther) => {
+      const id = newId();
+      tripRef().collection('transfers').doc(id)
+        .set({ id, fromId: t.fromId, toId: t.toId, amount: t.amount, currency, date: todayStr(),
+               createdAt: Date.now(), createdBy: myUid, v: 2, method, methodOther })
+        .catch(onWriteError);
+    }
+  });
 }
 
 function undoPaid(id) {
@@ -2090,31 +2143,39 @@ function isFullySettled(e) {
   return debts.every(d => paid.includes(d.fromId));
 }
 
-function writeRepayment(expenseId, d) {
+function writeRepayment(expenseId, d, method = null, methodOther = '') {
   const id = newId();
   tripRef().collection('transfers').doc(id).set({
     id, expenseId, fromId: d.fromId, toId: d.toId, amount: d.amount, currency: d.currency,
-    date: todayStr(), createdAt: Date.now(), createdBy: myUid, v: 2
+    date: todayStr(), createdAt: Date.now(), createdBy: myUid, v: 2, method, methodOther
   }).catch(onWriteError);
 }
 
 // 儲存支出後呼叫：金額、付款人可能改了，所以先刪掉舊的，再依最新金額重建
-function syncExpenseRepayments(e, allChecked, paidBefore) {
+function syncExpenseRepayments(e, allChecked, paidBefore, method, methodOther) {
   const debts = expenseDebts(e);
+  const old = transfers.filter(t => t.expenseId === e.id);
   let keep;
   if (allChecked) keep = debts.map(d => d.fromId);                     // 勾選：全部都還了
   else if (debts.length && debts.every(d => paidBefore.includes(d.fromId))) keep = [];   // 原本全還，現在取消勾選
   else keep = paidBefore;                                               // 沒動：保留原本部分還款的人
-  transfers.filter(t => t.expenseId === e.id)
-    .forEach(t => tripRef().collection('transfers').doc(t.id).delete().catch(onWriteError));
-  debts.filter(d => keep.includes(d.fromId)).forEach(d => writeRepayment(e.id, d));
+  old.forEach(t => tripRef().collection('transfers').doc(t.id).delete().catch(onWriteError));
+  debts.filter(d => keep.includes(d.fromId)).forEach(d => {
+    if (allChecked) { writeRepayment(e.id, d, method, methodOther); return; }   // 勾選時：用表單選的還款方式
+    const prev = old.find(t => t.fromId === d.fromId) || {};                  // 部分還款：保留各自原本的方式
+    writeRepayment(e.id, d, prev.method || null, prev.methodOther || '');
+  });
 }
 
 function markItemPaid(expenseId, fromId) {
   const e = expenses.find(x => x.id === expenseId);
   const d = e && expenseDebts(e).find(x => x.fromId === fromId);
   if (!d) return;
-  writeRepayment(expenseId, d);
+  openRepaySheet({
+    title: '確認已還款',
+    desc: `${memberName(d.fromId)} 已經給 ${memberName(d.toId)} ${formatAmount(d.amount, d.currency)}（${e.title}）`,
+    onConfirm: (method, methodOther) => writeRepayment(expenseId, d, method, methodOther)
+  });
 }
 
 function undoItemPaid(expenseId, fromId) {
@@ -2160,7 +2221,7 @@ function renderItemDebts() {
    一直卡在「連線中」時，畫面上會顯示可能原因、錯誤訊息和版本，
    截圖給別人看就能判斷問題出在哪裡。
    ========================================================= */
-const APP_VERSION = '2026-09-25 逐筆還款＋診斷';   // 每次改版更新，用來確認上傳的是不是最新檔案
+const APP_VERSION = '2026-09-25 還款方式';   // 每次改版更新，用來確認上傳的是不是最新檔案
 let authResolved = false;
 const diagErrors = [];
 
@@ -2220,6 +2281,100 @@ async function resetDevice() {
     }
   } catch (e) {}
   setTimeout(() => location.reload(), 500);
+}
+
+
+/* =========================================================
+   還款方式
+   ---------------------------------------------------------
+   還款紀錄多兩個欄位：method（cash / transfer / other）、methodOther（其他的文字）。
+   只是記錄用，不影響結算。
+   ========================================================= */
+const REPAY_METHODS = [
+  { id: 'cash', icon: '💵', name: '現金' },
+  { id: 'transfer', icon: '🏦', name: '轉帳' },
+  { id: 'other', icon: '✏️', name: '其他' }
+];
+const REPAY_METHOD_KEY = 'travelSplit_repayMethod';
+const REPAY_OTHER_KEY = 'travelSplit_repayOther';
+
+function repayLabel(t) {
+  const m = REPAY_METHODS.find(x => x.id === t.method);
+  if (!m) return '';
+  if (m.id === 'other') return `${m.icon} ${t.methodOther || '其他'}`;
+  return `${m.icon} ${m.name}`;
+}
+function rememberRepayMethod(method, other) {
+  if (method) localStorage.setItem(REPAY_METHOD_KEY, method); else localStorage.removeItem(REPAY_METHOD_KEY);
+  if (method === 'other') localStorage.setItem(REPAY_OTHER_KEY, other);
+}
+function methodChips(selected, onclickFn) {
+  return REPAY_METHODS.map(m =>
+    `<button class="pick ${m.id === selected ? 'on' : ''}" onclick="${onclickFn}('${m.id}')">${m.icon} ${m.name}</button>`).join('');
+}
+
+/* ---------- 面板（按「已還」、修改還款方式時出現） ---------- */
+let repaySheet = null;   // { method, onConfirm, remember }
+
+function openRepaySheet({ title, desc, method, methodOther, okText, onConfirm, remember = true }) {
+  repaySheet = {
+    method: method !== undefined ? method : (localStorage.getItem(REPAY_METHOD_KEY) || null),
+    onConfirm, remember
+  };
+  document.getElementById('repay-title').textContent = title;
+  document.getElementById('repay-desc').textContent = desc;
+  document.getElementById('repay-ok').textContent = okText || '確定';
+  document.getElementById('repay-other').value =
+    methodOther !== undefined ? methodOther : (localStorage.getItem(REPAY_OTHER_KEY) || '');
+  renderRepaySheet();
+  document.getElementById('repay-sheet').classList.add('show');
+}
+function renderRepaySheet() {
+  document.getElementById('repay-methods').innerHTML = methodChips(repaySheet.method, 'pickSheetMethod');
+  document.getElementById('repay-other').style.display = repaySheet.method === 'other' ? 'block' : 'none';
+}
+function pickSheetMethod(id) {
+  repaySheet.method = repaySheet.method === id ? null : id;   // 再點一次 = 取消
+  renderRepaySheet();
+}
+function closeRepaySheet() {
+  document.getElementById('repay-sheet').classList.remove('show');
+  repaySheet = null;
+}
+function confirmRepaySheet() {
+  if (!repaySheet) return;
+  const method = repaySheet.method;
+  const other = method === 'other' ? document.getElementById('repay-other').value.trim() : '';
+  if (repaySheet.remember) rememberRepayMethod(method, other);
+  const fn = repaySheet.onConfirm;
+  closeRepaySheet();
+  fn(method, other);
+}
+
+// 已還款紀錄：修改還款方式
+function editRepayMethod(transferId) {
+  const t = transfers.find(x => x.id === transferId);
+  if (!t) return;
+  openRepaySheet({
+    title: '修改還款方式',
+    desc: `${memberName(t.fromId)} 給 ${memberName(t.toId)} ${formatAmount(t.amount, t.currency)}`,
+    method: t.method || null, methodOther: t.methodOther || '', okText: '儲存', remember: false,
+    onConfirm: (method, methodOther) =>
+      tripRef().collection('transfers').doc(t.id).update({ method, methodOther }).catch(onWriteError)
+  });
+}
+
+/* ---------- 新增支出表單：勾「當場已結清」時選還款方式 ---------- */
+function renderFormRepay() {
+  if (!draft) return;
+  const on = document.getElementById('f-settled').checked;
+  document.getElementById('f-repay-box').style.display = on ? 'block' : 'none';
+  document.getElementById('f-repay-methods').innerHTML = methodChips(draft.repayMethod, 'pickFormRepay');
+  document.getElementById('f-repay-other').style.display = draft.repayMethod === 'other' ? 'block' : 'none';
+}
+function pickFormRepay(id) {
+  draft.repayMethod = draft.repayMethod === id ? null : id;
+  renderFormRepay();
 }
 
 /* ---------- 啟動（永遠放在 script 最後面，所有變數和函式都定義好之後才執行） ---------- */

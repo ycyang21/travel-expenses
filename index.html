@@ -342,6 +342,10 @@
         <div class="pick-list" id="f-payer"></div>
       </div>
 
+      <label>付款方式</label>
+      <div class="pick-list" id="f-method"></div>
+      <input id="f-method-other" placeholder="例如：Apple Pay、悠遊卡、旅遊卡" style="display:none;margin-top:8px">
+
       <label id="participants-label">誰要分攤</label>
       <div class="pick-list" id="f-participants"></div>
 
@@ -472,7 +476,21 @@ db.enablePersistence({ synchronizeTabs: true }).catch(e => console.warn('離線�
 
 const CURRENT_TRIP_KEY = 'travelSplit_currentTrip';   // 這支手機上次打開的旅程
 const LAST_CURRENCY_KEY = 'travelSplit_lastCurrency';
-const RATE_MODE_KEY = 'travelSplit_rateMode';   // 這支手機習慣「現在換算」還是「之後再算」
+const RATE_MODE_KEY = 'travelSplit_rateMode';
+const METHOD_KEY = 'travelSplit_payMethod';            // 這支手機上次用的付款方式
+const METHOD_OTHER_KEY = 'travelSplit_payMethodOther'; // 上次「其他」填的文字
+const PAY_METHODS = [
+  { id: 'card', icon: '💳', name: '信用卡' },
+  { id: 'cash', icon: '💵', name: '現金' },
+  { id: 'other', icon: '✏️', name: '其他' }
+];
+// 列表上顯示的文字，例如「💳 信用卡」、「✏️ Apple Pay」
+function methodLabel(e) {
+  const m = PAY_METHODS.find(x => x.id === e.paymentMethod);
+  if (!m) return '';
+  if (m.id === 'other') return e.paymentMethodOther ? `${m.icon} ${e.paymentMethodOther}` : `${m.icon} 其他`;
+  return `${m.icon} ${m.name}`;
+}   // 這支手機習慣「現在換算」還是「之後再算」
 
 let myUid = null;
 let tripId = null;
@@ -901,6 +919,8 @@ function openAddForm() {
   renderPhotos();
   draft.rateManual = false;
   draft.rateMode = localStorage.getItem(RATE_MODE_KEY) || 'now';
+  draft.method = localStorage.getItem(METHOD_KEY) || null;
+  document.getElementById('f-method-other').value = localStorage.getItem(METHOD_OTHER_KEY) || '';
   setRateSource('');
   document.getElementById('save-btn').textContent = '儲存支出';
   document.getElementById('delete-btn').style.display = 'none';
@@ -936,6 +956,8 @@ function openEditForm(id) {
   loadPhotos(e);
   draft.rateManual = true;
   draft.rateMode = (e.currency !== trip.baseCurrency && e.rate == null) ? 'later' : 'now';
+  draft.method = e.paymentMethod || null;
+  document.getElementById('f-method-other').value = e.paymentMethodOther || '';
   setRateSource('');
   document.getElementById('save-btn').textContent = '儲存修改';
   document.getElementById('delete-btn').style.display = 'block';
@@ -950,6 +972,10 @@ function buildForm() {
 
   document.getElementById('f-category').innerHTML = CATEGORIES.map(c =>
     `<button class="pick ${c.id === draft.category ? 'on' : ''}" onclick="draft.category='${c.id}';buildForm()">${c.icon} ${c.name}</button>`).join('');
+
+  document.getElementById('f-method').innerHTML = PAY_METHODS.map(m =>
+    `<button class="pick ${m.id === draft.method ? 'on' : ''}" onclick="setMethod('${m.id}')">${m.icon} ${m.name}</button>`).join('');
+  document.getElementById('f-method-other').style.display = draft.method === 'other' ? 'block' : 'none';
 
   document.getElementById('f-payer').innerHTML = trip.members.map(m =>
     `<button class="pick ${m.id === draft.payerId ? 'on' : ''}" onclick="draft.payerId='${m.id}';buildForm()">${escapeHTML(m.name)}</button>`).join('');
@@ -969,6 +995,14 @@ function buildForm() {
   document.getElementById('payer-box').style.display = t === 'self' ? 'none' : 'block';
   document.getElementById('participants-label').textContent = t === 'self' ? '有誰參加' : '誰要分攤';
   updateForm();
+}
+
+function setMethod(id) {
+  draft.method = draft.method === id ? null : id;   // 點已選的那個 = 取消選擇
+  buildForm();
+  if (draft.method === 'other' && !document.getElementById('f-method-other').value) {
+    document.getElementById('f-method-other').focus();
+  }
 }
 
 function toggleParticipant(id) {
@@ -1130,6 +1164,8 @@ function saveExpense() {
     photoIds: draft.photos.map(p => p.id),
     currency: cur, amount, rate,
     payerId: draft.splitType === 'self' ? null : draft.payerId,
+    paymentMethod: draft.method,
+    paymentMethodOther: draft.method === 'other' ? document.getElementById('f-method-other').value.trim() : '',
     splitType: draft.splitType,
     shares, baseAmount, baseShares,
     v: 2,   // 資料格式版本：金額統一存到小數點後兩位
@@ -1147,6 +1183,8 @@ function saveExpense() {
   // 記住這次的幣別（只存在這支手機）和匯率（旅伴共用）
   localStorage.setItem(LAST_CURRENCY_KEY, cur);
   if (cur !== base) localStorage.setItem(RATE_MODE_KEY, draft.rateMode);
+  if (draft.method) localStorage.setItem(METHOD_KEY, draft.method); else localStorage.removeItem(METHOD_KEY);
+  if (draft.method === 'other') localStorage.setItem(METHOD_OTHER_KEY, data.paymentMethodOther);
   if (cur !== base && rate !== null && (trip.rates || {})[cur] !== rate) {
     tripRef().update({ ['rates.' + cur]: rate }).catch(onWriteError);
   }
@@ -1211,7 +1249,7 @@ function renderList() {
       return `<button class="exp" onclick="openEditForm('${e.id}')">
         <span class="icon">${cat.icon}</span>
         <span class="mid"><div class="title">${escapeHTML(e.title)}</div>
-          <div class="who">${e.splitType === 'self' ? `各付各的・${n} 人` : `${escapeHTML(memberName(e.payerId))} 付款・${n} 人分攤`}${e.note ? '・📝' : ''}${(e.photoIds || []).length ? `・📷${e.photoIds.length}` : ''}</div></span>
+          <div class="who">${e.splitType === 'self' ? `各付各的${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}・${n} 人` : `${escapeHTML(memberName(e.payerId))} 付款${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}・${n} 人分攤`}${e.note ? '・📝' : ''}${(e.photoIds || []).length ? `・📷${e.photoIds.length}` : ''}</div></span>
         <span class="money">${formatAmount(e.amount, e.currency)}${converted}</span>
       </button>`;
     }).join('');

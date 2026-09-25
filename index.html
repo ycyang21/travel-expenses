@@ -199,6 +199,35 @@
   .calc-keys .fn { font-size: 18px; color: var(--muted); }
   .calc-keys .ok { grid-row: span 2; height: auto; background: var(--stamp); color: #fff; font-size: 18px; font-weight: 600; }
   .calc-keys .zero { grid-column: span 2; }
+
+  /* ===== 備註與照片 ===== */
+  textarea {
+    width: 100%; min-height: 80px; padding: 12px; resize: vertical;
+    border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink);
+    font: inherit; font-size: 16px;
+  }
+  .photo-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .thumb { position: relative; aspect-ratio: 1; border-radius: 8px; overflow: hidden; background: var(--paper); }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb .rm {
+    position: absolute; top: 4px; right: 4px; width: 26px; height: 26px; border-radius: 50%;
+    border: 0; background: rgba(27, 42, 65, .75); color: #fff; font-size: 14px; line-height: 26px; padding: 0;
+  }
+  .add-photo {
+    aspect-ratio: 1; border: 1px dashed var(--muted); border-radius: 8px; background: #fff;
+    color: var(--muted); font-size: 13px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  }
+  .add-photo span { font-size: 22px; }
+  .viewer { position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, .92); display: none; align-items: center; justify-content: center; }
+  .viewer.show { display: flex; }
+  .viewer img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .viewer .close { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 12px); right: 16px; color: #fff; font-size: 15px; border: 0; background: rgba(255,255,255,.15); border-radius: 999px; padding: 8px 14px; }
+
+  /* ===== 自動抓匯率 ===== */
+  .rate-row { display: flex; gap: 8px; }
+  .rate-row input { flex: 1; min-width: 0; }
+  .rate-fetch { padding: 0 12px; border: 1px solid var(--stamp); border-radius: 8px; background: #fff; color: var(--stamp); white-space: nowrap; font-size: 15px; }
+  .rate-fetch:disabled { opacity: .5; }
 </style>
 </head>
 <body>
@@ -273,9 +302,21 @@
 
       <!-- 幣別跟結算幣別不同時才顯示匯率 -->
       <div id="rate-box">
+        <label>換算成結算幣別</label>
+        <div class="seg" style="margin-top:0">
+          <button id="rm-now" onclick="setRateMode('now')">現在換算</button>
+          <button id="rm-later" onclick="setRateMode('later')">之後再算</button>
+        </div>
+        <div class="hint" id="rate-later-hint">先只記外幣金額。旅程結束後，到「結算」頁一次設定匯率換算。</div>
+        <div id="rate-now-box">
         <label for="f-rate" id="rate-label">匯率</label>
-        <input id="f-rate" inputmode="decimal" placeholder="例如 32.5" oninput="updateForm()">
+        <div class="rate-row">
+          <input id="f-rate" inputmode="decimal" placeholder="例如 32.5" oninput="draft.rateManual = true; setRateSource(''); updateForm()">
+          <button class="rate-fetch" id="rate-fetch-btn" onclick="fetchRateForForm()">🔄 抓匯率</button>
+        </div>
+        <div class="hint" id="rate-source"></div>
         <div class="hint" id="rate-preview"></div>
+        </div>
       </div>
 
       <label for="f-title">項目</label>
@@ -285,7 +326,7 @@
       <div class="pick-list" id="f-category"></div>
 
       <label for="f-date">日期</label>
-      <input id="f-date" type="date">
+      <input id="f-date" type="date" onchange="autoFetchRate()">
 
       <label>怎麼付</label>
       <div class="seg" style="margin-top:0">
@@ -305,6 +346,14 @@
       <div class="pick-list" id="f-participants"></div>
 
       <div id="split-detail"></div>
+
+      <label for="f-note">備註</label>
+      <textarea id="f-note" placeholder="想補充的事，例如：含小費 18%"></textarea>
+
+      <label>照片（收據、菜單等，最多 4 張）</label>
+      <div class="photo-grid" id="f-photos"></div>
+      <!-- 隱藏的選檔元件：手機上會讓你選「拍照」或「從相簿選」 -->
+      <input type="file" id="f-photo-input" accept="image/*" multiple hidden onchange="addPhotos(this.files); this.value=''">
 
       <button class="btn" onclick="saveExpense()" id="save-btn">儲存支出</button>
       <button class="btn danger" onclick="deleteExpense()" id="delete-btn">刪除這筆</button>
@@ -345,6 +394,12 @@
   <button data-page="page-settle" onclick="showPage('page-settle')"><span>⚖️</span>結算</button>
   <button data-page="page-settings" onclick="showPage('page-settings')"><span>⚙️</span>設定</button>
 </nav>
+
+<!-- 全螢幕看照片 -->
+<div class="viewer" id="photo-viewer" onclick="closeViewer()">
+  <img id="viewer-img" alt="照片">
+  <button class="close">關閉</button>
+</div>
 
 <!-- 內建計算機：點金額欄位時從下方滑出 -->
 <div class="calc" id="calc">
@@ -417,12 +472,14 @@ db.enablePersistence({ synchronizeTabs: true }).catch(e => console.warn('離線�
 
 const CURRENT_TRIP_KEY = 'travelSplit_currentTrip';   // 這支手機上次打開的旅程
 const LAST_CURRENCY_KEY = 'travelSplit_lastCurrency';
+const RATE_MODE_KEY = 'travelSplit_rateMode';   // 這支手機習慣「現在換算」還是「之後再算」
 
 let myUid = null;
 let tripId = null;
 let trip = null;
 let expenses = [];
 let transfers = [];
+let rawExpenses = [], rawTransfers = [];   // 雲端讀到的原始資料（可能是舊格式）
 let setupMembers = [];
 let unsubscribers = [];   // 切換旅程時要停止監聽舊旅程
 let joinTrip = null;      // 加入流程中，正在看的旅程
@@ -488,7 +545,7 @@ function startApp() {
 /* ---------- 旅程列表（沒有打開任何旅程時） ---------- */
 async function showTripPicker() {
   stopListening();
-  tripId = null; trip = null; expenses = []; transfers = [];
+  tripId = null; trip = null; expenses = []; transfers = []; rawExpenses = []; rawTransfers = [];
   localStorage.removeItem(CURRENT_TRIP_KEY);
   document.getElementById('tabs').classList.remove('show');
   setHeader('旅途分帳', '選擇或建立一趟旅程');
@@ -559,7 +616,7 @@ function stopListening() {
 function openTrip(id) {
   stopListening();
   tripId = id;
-  trip = null; expenses = []; transfers = [];
+  trip = null; expenses = []; transfers = []; rawExpenses = []; rawTransfers = [];
   localStorage.setItem(CURRENT_TRIP_KEY, id);
   setHeader('旅途分帳', '讀取中…');
 
@@ -579,12 +636,12 @@ function openTrip(id) {
   }));
 
   unsubscribers.push(tripRef().collection('expenses').onSnapshot(snap => {
-    expenses = snap.docs.map(d => d.data());
+    rawExpenses = snap.docs.map(d => d.data());
     render();
   }, console.error));
 
   unsubscribers.push(tripRef().collection('transfers').onSnapshot(snap => {
-    transfers = snap.docs.map(d => d.data());
+    rawTransfers = snap.docs.map(d => d.data());
     render();
   }, console.error));
 }
@@ -663,6 +720,7 @@ async function deleteTrip() {
   const batch = db.batch();
   expenses.forEach(e => batch.delete(tripRef().collection('expenses').doc(e.id)));
   transfers.forEach(t => batch.delete(tripRef().collection('transfers').doc(t.id)));
+  expenses.forEach(e => (e.photoIds || []).forEach(pid => batch.delete(tripRef().collection('photos').doc(pid))));
   batch.delete(tripRef());
   const id = tripId;
   showTripPicker();
@@ -672,6 +730,8 @@ async function deleteTrip() {
 /* ---------- 畫面更新（資料變動後都呼叫這個） ---------- */
 function render() {
   if (!trip) return;
+  expenses = rawExpenses.map(normalizeExpense);
+  transfers = rawTransfers.map(normalizeTransfer);
   const me = myMember();
   setHeader(trip.name, `${trip.members.length} 人同行，以 ${trip.baseCurrency} 結算` + (me ? `・我是 ${me.name}` : ''));
 
@@ -712,12 +772,14 @@ window.addEventListener('offline', () => trip && render());
 
 // 各幣別有幾位小數
 const CURRENCIES = {
-  TWD: { name: '新台幣', decimals: 0, symbol: 'NT$' },
-  USD: { name: '美元', decimals: 2, symbol: 'US$' },
-  JPY: { name: '日圓', decimals: 0, symbol: '¥' },
-  EUR: { name: '歐元', decimals: 2, symbol: '€' },
-  KRW: { name: '韓元', decimals: 0, symbol: '₩' },
-  GBP: { name: '英鎊', decimals: 2, symbol: '£' }
+  // decimals：儲存用的小數位數，全部統一 2 位（可以記到小數點後兩位）
+  // showCents：'always' 永遠顯示兩位（US$12.00）；'auto' 整數時不顯示（NT$350、NT$350.50）
+  TWD: { name: '新台幣', decimals: 2, showCents: 'auto', symbol: 'NT$' },
+  USD: { name: '美元', decimals: 2, showCents: 'always', symbol: 'US$' },
+  JPY: { name: '日圓', decimals: 2, showCents: 'auto', symbol: '¥' },
+  EUR: { name: '歐元', decimals: 2, showCents: 'always', symbol: '€' },
+  KRW: { name: '韓元', decimals: 2, showCents: 'auto', symbol: '₩' },
+  GBP: { name: '英鎊', decimals: 2, showCents: 'always', symbol: '£' }
 };
 const CATEGORIES = [
   { id: 'food', icon: '🍽️', name: '餐飲' },
@@ -752,7 +814,8 @@ function formatAmount(minor, currency) {
   const abs = Math.abs(minor);
   const divisor = 10 ** c.decimals;
   const intStr = Math.floor(abs / divisor).toLocaleString('en-US');
-  const frac = c.decimals ? '.' + String(abs % divisor).padStart(c.decimals, '0') : '';
+  const cents = abs % divisor;
+  const frac = (c.showCents === 'always' || cents) ? '.' + String(cents).padStart(c.decimals, '0') : '';
   return (neg ? '-' : '') + c.symbol + intStr + frac;
 }
 
@@ -775,6 +838,35 @@ function convertToBase(minor, currency, rate) {
   const from = CURRENCIES[currency].decimals;
   const to = CURRENCIES[trip.baseCurrency].decimals;
   return Math.round(minor / 10 ** from * rate * 10 ** to);
+}
+
+function minorToText(minor, currency) {
+  const d = CURRENCIES[currency].decimals;
+  return (minor / 10 ** d).toFixed(d).replace(/\.00$/, '');
+}
+
+/* ---------- 舊資料相容 ----------
+   早期版本台幣、日圓、韓元是存「整數元」，現在統一存「分」（×100）。
+   沒有 v: 2 標記的舊資料，讀進來時自動換算，不需要改資料庫。 */
+const LEGACY_DECIMALS = { TWD: 0, JPY: 0, KRW: 0 };
+function legacyFactor(cur) { return 10 ** (2 - (LEGACY_DECIMALS[cur] ?? 2)); }
+function scaleMap(obj, f) {
+  if (!obj) return obj;
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) out[k] = v * f;
+  return out;
+}
+function normalizeExpense(e) {
+  if (e.v >= 2) return e;
+  const f = legacyFactor(e.currency), g = legacyFactor(trip.baseCurrency);
+  return { ...e,
+    amount: e.amount * f, shares: scaleMap(e.shares, f),
+    baseAmount: e.baseAmount == null ? null : e.baseAmount * g, baseShares: scaleMap(e.baseShares, g) };
+}
+function normalizeTransfer(t) {
+  const currency = t.currency || trip.baseCurrency;
+  if (t.v >= 2) return { ...t, currency };
+  return { ...t, currency, amount: t.amount * legacyFactor(currency) };
 }
 
 function todayStr() {
@@ -803,17 +895,24 @@ function openAddForm() {
   document.getElementById('f-date').value = todayStr();
   document.getElementById('f-rate').value = (trip.rates || {})[lastCurrency] || '';
   document.getElementById('form-title').textContent = '新增支出';
+  document.getElementById('f-note').value = '';
+  draft.photos = [];            // [{ id, data, isNew }]
+  draft.removedPhotoIds = [];   // 編輯時被刪掉的舊照片
+  renderPhotos();
+  draft.rateManual = false;
+  draft.rateMode = localStorage.getItem(RATE_MODE_KEY) || 'now';
+  setRateSource('');
   document.getElementById('save-btn').textContent = '儲存支出';
   document.getElementById('delete-btn').style.display = 'none';
   buildForm();
+  autoFetchRate();
   showPage('page-add');
 }
 
 function openEditForm(id) {
   const e = expenses.find(x => x.id === id);
   if (!e) return;
-  const d = CURRENCIES[e.currency].decimals;
-  const toText = v => (v / 10 ** d).toFixed(d);
+  const toText = v => minorToText(v, e.currency);
   draft = {
     editingId: id,
     currency: e.currency,
@@ -829,8 +928,15 @@ function openEditForm(id) {
   document.getElementById('f-amount').value = toText(e.amount);
   document.getElementById('f-title').value = e.title;
   document.getElementById('f-date').value = e.date;
-  document.getElementById('f-rate').value = e.currency === trip.baseCurrency ? '' : e.rate;
+  document.getElementById('f-rate').value = e.currency === trip.baseCurrency ? '' : (e.rate ?? '');
   document.getElementById('form-title').textContent = '編輯支出';
+  document.getElementById('f-note').value = e.note || '';
+  draft.photos = [];
+  draft.removedPhotoIds = [];
+  loadPhotos(e);
+  draft.rateManual = true;
+  draft.rateMode = (e.currency !== trip.baseCurrency && e.rate == null) ? 'later' : 'now';
+  setRateSource('');
   document.getElementById('save-btn').textContent = '儲存修改';
   document.getElementById('delete-btn').style.display = 'block';
   buildForm();
@@ -883,7 +989,10 @@ function onCurrencyChange() {
   draft.currency = document.getElementById('f-currency').value;
   // 自動帶入這個幣別上次用的匯率
   document.getElementById('f-rate').value = (trip.rates || {})[draft.currency] || '';
+  draft.rateManual = false;
+  setRateSource('');
   updateForm();
+  autoFetchRate();
 }
 
 /* ---------- 即時更新：匯率預覽、分攤明細 ---------- */
@@ -898,6 +1007,11 @@ function updateForm() {
     rateBox.style.display = 'none';
   } else {
     rateBox.style.display = 'block';
+    const later = draft.rateMode === 'later';
+    document.getElementById('rm-now').classList.toggle('on', !later);
+    document.getElementById('rm-later').classList.toggle('on', later);
+    document.getElementById('rate-later-hint').style.display = later ? 'block' : 'none';
+    document.getElementById('rate-now-box').style.display = later ? 'none' : 'block';
     document.getElementById('rate-label').textContent = `匯率（1 ${cur} ＝ 幾 ${base}）`;
     const rate = parseFloat(document.getElementById('f-rate').value);
     document.getElementById('rate-preview').textContent =
@@ -955,7 +1069,7 @@ function saveExpense() {
   const base = trip.baseCurrency;
   const amount = parseAmount(document.getElementById('f-amount').value, cur);
   if (!amount) {
-    alert(CURRENCIES[cur].decimals === 0 ? `請輸入金額（${cur} 不用小數點）` : '請輸入金額');
+    alert('請輸入金額（最多到小數點後兩位）');
     return;
   }
   const title = document.getElementById('f-title').value.trim() ||
@@ -964,8 +1078,12 @@ function saveExpense() {
 
   let rate = 1;
   if (cur !== base) {
-    rate = parseFloat(document.getElementById('f-rate').value);
-    if (!(rate > 0)) { alert('請輸入匯率'); return; }
+    if (draft.rateMode === 'later') {
+      rate = null;
+    } else {
+      rate = parseFloat(document.getElementById('f-rate').value);
+      if (!(rate > 0)) { alert('請輸入匯率，或改選「之後再算」'); return; }
+    }
   }
 
   const ids = draft.participants;
@@ -985,18 +1103,36 @@ function saveExpense() {
   ids.forEach((id, i) => { shares[id] = parts[i]; });
 
   // 換算成結算幣：先換總額，再依比例分配，保證加總一致
-  const baseAmount = convertToBase(amount, cur, rate);
-  const baseParts = allocate(baseAmount, parts);
-  const baseShares = {};
-  ids.forEach((id, i) => { baseShares[id] = baseParts[i]; });
+  // 之後再算：先不換算，baseAmount 和 baseShares 留空（null）
+  let baseAmount = null, baseShares = null;
+  if (rate !== null) {
+    baseAmount = convertToBase(amount, cur, rate);
+    const baseParts = allocate(baseAmount, parts);
+    baseShares = {};
+    ids.forEach((id, i) => { baseShares[id] = baseParts[i]; });
+  }
+
+  if (draft.photosLoading || draft.photosBusy) { alert('照片還在處理，請稍等一下再儲存'); return; }
 
   const now = Date.now();
+  const expId = draft.editingId || newId();
+
+  // 照片存在另一個 collection（photos），支出只記照片的 id。
+  // 這樣打開支出列表時不會連同照片一起下載，速度才會快。
+  const photoCol = tripRef().collection('photos');
+  draft.photos.filter(p => p.isNew).forEach(p =>
+    photoCol.doc(p.id).set({ id: p.id, expenseId: expId, data: p.data, createdAt: now, createdBy: myUid }).catch(onWriteError));
+  draft.removedPhotoIds.forEach(id => photoCol.doc(id).delete().catch(onWriteError));
+
   const data = {
     title, category: draft.category, date,
+    note: document.getElementById('f-note').value.trim(),
+    photoIds: draft.photos.map(p => p.id),
     currency: cur, amount, rate,
     payerId: draft.splitType === 'self' ? null : draft.payerId,
     splitType: draft.splitType,
     shares, baseAmount, baseShares,
+    v: 2,   // 資料格式版本：金額統一存到小數點後兩位
     updatedAt: now
   };
 
@@ -1005,13 +1141,13 @@ function saveExpense() {
     // update 只改這些欄位，保留 createdAt、createdBy
     col.doc(draft.editingId).update(data).catch(onWriteError);
   } else {
-    const id = newId();
-    col.doc(id).set({ id, createdAt: now, createdBy: myUid, ...data }).catch(onWriteError);
+    col.doc(expId).set({ id: expId, createdAt: now, createdBy: myUid, ...data }).catch(onWriteError);
   }
 
   // 記住這次的幣別（只存在這支手機）和匯率（旅伴共用）
   localStorage.setItem(LAST_CURRENCY_KEY, cur);
-  if (cur !== base && (trip.rates || {})[cur] !== rate) {
+  if (cur !== base) localStorage.setItem(RATE_MODE_KEY, draft.rateMode);
+  if (cur !== base && rate !== null && (trip.rates || {})[cur] !== rate) {
     tripRef().update({ ['rates.' + cur]: rate }).catch(onWriteError);
   }
   // 不用等雲端回應：有離線快取，畫面會立刻更新；沒網路時也不會卡住
@@ -1021,11 +1157,29 @@ function saveExpense() {
 function deleteExpense() {
   if (!draft.editingId) return;
   if (!confirm('確定刪除這筆支出？')) return;
+  const e = expenses.find(x => x.id === draft.editingId);
+  (e && e.photoIds || []).forEach(id => tripRef().collection('photos').doc(id).delete().catch(onWriteError));
   tripRef().collection('expenses').doc(draft.editingId).delete().catch(onWriteError);
   showPage('page-list');
 }
 
 /* ---------- 支出列表 ---------- */
+function isConverted(e) { return e.baseAmount != null; }
+
+// 加總：已換算的算結算幣；還沒換算的外幣，各幣別分開加
+function sumExpenses(list) {
+  const base = trip.baseCurrency;
+  let total = 0;
+  const foreign = {};
+  for (const e of list) {
+    if (isConverted(e)) total += e.baseAmount;
+    else foreign[e.currency] = (foreign[e.currency] || 0) + e.amount;
+  }
+  const parts = [formatAmount(total, base)];
+  for (const [c, v] of Object.entries(foreign)) parts.push(formatAmount(v, c));
+  return { total, foreign, text: parts.join(' ＋ ') };
+}
+
 function renderList() {
   const box = document.getElementById('expense-list');
   if (!trip) return;
@@ -1034,33 +1188,36 @@ function renderList() {
     return;
   }
   const base = trip.baseCurrency;
-  const total = expenses.reduce((a, e) => a + e.baseAmount, 0);
+  const sum = sumExpenses(expenses);
 
   // 新的日期在上面；同一天內新的在上面
   const sorted = [...expenses].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
   const groups = {};
   sorted.forEach(e => { (groups[e.date] = groups[e.date] || []).push(e); });
 
-  let html = `<div class="total-bar"><span>旅程總花費</span><strong>${formatAmount(total, base)}</strong></div>`;
+  let html = `<div class="total-bar"><span>旅程總花費</span><strong>${formatAmount(sum.total, base)}</strong></div>`;
+  const foreignList = Object.entries(sum.foreign);
+  if (foreignList.length) {
+    html += `<div class="hint" style="text-align:right;margin:6px 4px 0">另有尚未換算：${foreignList.map(([c, v]) => formatAmount(v, c)).join('、')}</div>`;
+  }
   for (const [date, list] of Object.entries(groups)) {
-    const dayTotal = list.reduce((a, e) => a + e.baseAmount, 0);
     const [y, m, d] = date.split('-');
-    html += `<div class="day-head"><span>${Number(m)}/${Number(d)}</span><span>${formatAmount(dayTotal, base)}</span></div>`;
+    html += `<div class="day-head"><span>${Number(m)}/${Number(d)}</span><span>${sumExpenses(list).text}</span></div>`;
     html += list.map(e => {
       const cat = CATEGORIES.find(c => c.id === e.category) || CATEGORIES[5];
       const n = Object.keys(e.shares).length;
-      const converted = e.currency !== base ? `<small>≈ ${formatAmount(e.baseAmount, base)}</small>` : '';
+      let converted = '';
+      if (e.currency !== base) converted = isConverted(e) ? `<small>≈ ${formatAmount(e.baseAmount, base)}</small>` : '<small>尚未換算</small>';
       return `<button class="exp" onclick="openEditForm('${e.id}')">
         <span class="icon">${cat.icon}</span>
         <span class="mid"><div class="title">${escapeHTML(e.title)}</div>
-          <div class="who">${e.splitType === 'self' ? `各付各的・${n} 人` : `${escapeHTML(memberName(e.payerId))} 付款・${n} 人分攤`}</div></span>
+          <div class="who">${e.splitType === 'self' ? `各付各的・${n} 人` : `${escapeHTML(memberName(e.payerId))} 付款・${n} 人分攤`}${e.note ? '・📝' : ''}${(e.photoIds || []).length ? `・📷${e.photoIds.length}` : ''}</div></span>
         <span class="money">${formatAmount(e.amount, e.currency)}${converted}</span>
       </button>`;
     }).join('');
   }
   box.innerHTML = html;
 }
-
 
 /* =========================================================
    第三步：結算
@@ -1074,24 +1231,37 @@ function renderList() {
       n 個人最多只需要 n−1 筆轉帳。
    ========================================================= */
 
-function computeBalances() {
+// 把支出分組：已換算的一組（結算幣），每個還沒換算的外幣各一組
+function settleGroups() {
+  const base = trip.baseCurrency;
+  const groups = [{ currency: base, converted: true, list: expenses.filter(isConverted) }];
+  const foreign = {};
+  expenses.filter(e => !isConverted(e)).forEach(e => { (foreign[e.currency] = foreign[e.currency] || []).push(e); });
+  for (const [c, list] of Object.entries(foreign)) groups.push({ currency: c, converted: false, list });
+  return groups;
+}
+
+// 算一組的每人淨額
+function computeBalances(group) {
   const bal = {};
   trip.members.forEach(m => { bal[m.id] = { paid: 0, owed: 0, net: 0 }; });
   const ensure = id => (bal[id] = bal[id] || { paid: 0, owed: 0, net: 0 });
+  const amt = e => group.converted ? e.baseAmount : e.amount;
+  const shares = e => group.converted ? e.baseShares : e.shares;
 
-  for (const e of expenses) {
+  for (const e of group.list) {
     if (e.splitType === 'self') {
       // 各付各的：每個人付了自己那份，也花了自己那份 → 不會產生欠款
-      for (const [id, v] of Object.entries(e.baseShares)) { ensure(id).paid += v; ensure(id).owed += v; }
+      for (const [id, v] of Object.entries(shares(e))) { ensure(id).paid += v; ensure(id).owed += v; }
       continue;
     }
-    ensure(e.payerId).paid += e.baseAmount;
-    for (const [id, v] of Object.entries(e.baseShares)) ensure(id).owed += v;
+    ensure(e.payerId).paid += amt(e);
+    for (const [id, v] of Object.entries(shares(e))) ensure(id).owed += v;
   }
   for (const id in bal) bal[id].net = bal[id].paid - bal[id].owed;
 
-  // 已經還的錢：付錢的人淨額增加，收錢的人淨額減少
-  for (const t of transfers) {
+  // 這個幣別已經還的錢：付錢的人淨額增加，收錢的人淨額減少
+  for (const t of transfers.filter(t => t.currency === group.currency)) {
     ensure(t.fromId).net += t.amount;
     ensure(t.toId).net -= t.amount;
   }
@@ -1121,6 +1291,15 @@ function computeTransfers(bal) {
   return result;
 }
 
+function transferRows(todo, currency) {
+  if (todo.length === 0) return '<div class="all-clear">✓ 大家都兩清了</div>';
+  return todo.map((t, i) => `<div class="transfer">
+    <div class="flow"><b>${escapeHTML(memberName(t.fromId))}</b> 給 <b>${escapeHTML(memberName(t.toId))}</b>
+      <span class="amt">${formatAmount(t.amount, currency)}</span></div>
+    <button class="done-btn" onclick="markPaid('${currency}', ${i})">已還</button>
+  </div>`).join('');
+}
+
 function renderSettle() {
   const box = document.getElementById('settle-box');
   if (!trip) return;
@@ -1129,42 +1308,70 @@ function renderSettle() {
     return;
   }
   const base = trip.baseCurrency;
-  const bal = computeBalances();
-  const todo = computeTransfers(bal);
+  const groups = settleGroups();
+  const main = groups[0];
+  const foreignGroups = groups.slice(1);
+  const mainBal = computeBalances(main);
+  let html = '';
 
-  // 1. 還需要的轉帳
-  let html = '<div class="card"><h2>要怎麼還</h2>';
-  if (todo.length === 0) {
-    html += '<div class="all-clear">✓ 大家都兩清了</div>';
-  } else {
-    html += todo.map((t, i) => `<div class="transfer">
-      <div class="flow"><b>${escapeHTML(memberName(t.fromId))}</b> 給 <b>${escapeHTML(memberName(t.toId))}</b>
-        <span class="amt">${formatAmount(t.amount, base)}</span></div>
-      <button class="done-btn" onclick="markPaid(${i})">已還</button>
-    </div>`).join('');
+  // 1. 還沒換算的外幣：一次換算
+  if (foreignGroups.length) {
+    html += '<div class="card"><h2>尚未換算的外幣</h2>' +
+      '<p class="hint" style="margin-top:0">設定匯率後按「換算」，這些支出會一起換成 ' + base + '，併入下方的結算。</p>';
+    html += foreignGroups.map(g => {
+      const total = g.list.reduce((a, e) => a + e.amount, 0);
+      const c = g.currency;
+      return `<div style="margin-top:14px">
+        <div><b>${c}</b>：${g.list.length} 筆，共 ${formatAmount(total, c)}</div>
+        <label for="conv-${c}">匯率（1 ${c} ＝ 幾 ${base}）</label>
+        <div class="rate-row">
+          <input id="conv-${c}" inputmode="decimal" value="${(trip.rates || {})[c] || ''}" placeholder="例如 32.5" oninput="previewConvert('${c}')">
+          <button class="rate-fetch" onclick="fetchConvertRate('${c}')">🔄 最新匯率</button>
+        </div>
+        <div class="hint" id="conv-hint-${c}"></div>
+        <button class="btn" style="margin-top:10px" onclick="convertCurrency('${c}')">換算 ${c}</button>
+      </div>`;
+    }).join('');
+    html += '</div>';
   }
-  html += '</div>';
 
-  // 2. 每個人的收支
-  html += '<div class="card"><h2>每人明細</h2>';
+  // 2. 還需要的轉帳（結算幣）
+  if (main.list.length || transfers.some(t => t.currency === base)) {
+    html += `<div class="card"><h2>要怎麼還</h2>${transferRows(computeTransfers(mainBal), base)}</div>`;
+  }
+
+  // 3. 還沒換算的外幣，也可以直接用外幣互相還
+  for (const g of foreignGroups) {
+    html += `<div class="card"><h2>要怎麼還（${g.currency}，尚未換算）</h2>` +
+      '<p class="hint" style="margin-top:0">如果大家直接用外幣現金還，照這裡還就好，不必換算。</p>' +
+      transferRows(computeTransfers(computeBalances(g)), g.currency) + '</div>';
+  }
+
+  // 4. 每個人的收支
+  html += `<div class="card"><h2>每人明細（${base}）</h2>`;
   html += trip.members.map(m => {
-    const b = bal[m.id];
+    const b = mainBal[m.id];
     const cls = b.net > 0 ? 'plus' : b.net < 0 ? 'minus' : 'zero';
     const label = b.net > 0 ? '可收回' : b.net < 0 ? '還要付' : '已兩清';
+    const extra = foreignGroups.map(g => {
+      const owed = g.list.reduce((a, e) => a + (e.shares[m.id] || 0), 0);
+      return owed ? formatAmount(owed, g.currency) : '';
+    }).filter(Boolean);
     return `<div class="bal">
       <div><div class="name">${escapeHTML(m.name)}</div>
-        <div class="detail">付了 ${formatAmount(b.paid, base)}・實際花費 ${formatAmount(b.owed, base)}</div></div>
+        <div class="detail">付了 ${formatAmount(b.paid, base)}・實際花費 ${formatAmount(b.owed, base)}</div>
+        ${extra.length ? `<div class="detail">另有未換算花費 ${extra.join('、')}</div>` : ''}</div>
       <div class="net ${cls}"><div class="detail">${label}</div>${formatAmount(Math.abs(b.net), base)}</div>
     </div>`;
   }).join('');
   html += '</div>';
 
-  // 3. 已經還的紀錄
+  // 5. 已經還的紀錄
   if (transfers.length) {
     html += '<div class="card"><h2>已還款紀錄</h2>';
     html += [...transfers].sort((a, b) => b.createdAt - a.createdAt).map(t => `<div class="transfer paid">
       <div class="flow">${escapeHTML(memberName(t.fromId))} 給 ${escapeHTML(memberName(t.toId))}
-        <span class="amt">${formatAmount(t.amount, base)}</span>
+        <span class="amt">${formatAmount(t.amount, t.currency)}</span>
         <span class="detail">${t.date}</span></div>
       <button class="undo-btn" onclick="undoPaid('${t.id}')">取消</button>
     </div>`).join('');
@@ -1173,17 +1380,20 @@ function renderSettle() {
 
   html += '<button class="btn ghost" onclick="shareSettle()">分享結算結果</button>';
   box.innerHTML = html;
+  foreignGroups.forEach(g => previewConvert(g.currency));
 }
 
 // 按「已還」：記一筆還款，結算會自動重算
-function markPaid(i) {
-  const t = computeTransfers(computeBalances())[i];
+function markPaid(currency, i) {
+  const group = settleGroups().find(g => g.currency === currency && (g.converted === (currency === trip.baseCurrency)));
+  if (!group) return;
+  const t = computeTransfers(computeBalances(group))[i];
   if (!t) return;
-  const msg = `確認 ${memberName(t.fromId)} 已經給 ${memberName(t.toId)} ${formatAmount(t.amount, trip.baseCurrency)}？`;
+  const msg = `確認 ${memberName(t.fromId)} 已經給 ${memberName(t.toId)} ${formatAmount(t.amount, currency)}？`;
   if (!confirm(msg)) return;
   const id = newId();
   tripRef().collection('transfers').doc(id)
-    .set({ id, fromId: t.fromId, toId: t.toId, amount: t.amount, date: todayStr(), createdAt: Date.now(), createdBy: myUid })
+    .set({ id, fromId: t.fromId, toId: t.toId, amount: t.amount, currency, date: todayStr(), createdAt: Date.now(), createdBy: myUid, v: 2 })
     .catch(onWriteError);
 }
 
@@ -1192,17 +1402,75 @@ function undoPaid(id) {
   tripRef().collection('transfers').doc(id).delete().catch(onWriteError);
 }
 
+/* ---------- 一次換算某個外幣 ---------- */
+function previewConvert(c) {
+  const el = document.getElementById('conv-hint-' + c);
+  if (!el) return;
+  const rate = parseFloat(document.getElementById('conv-' + c).value);
+  const total = expenses.filter(e => !isConverted(e) && e.currency === c).reduce((a, e) => a + e.amount, 0);
+  el.textContent = rate > 0 ? `換算後約 ${formatAmount(convertToBase(total, c, rate), trip.baseCurrency)}` : '';
+}
+
+async function fetchConvertRate(c) {
+  const el = document.getElementById('conv-hint-' + c);
+  el.textContent = '正在抓匯率…';
+  try {
+    const { rate, date } = await getRate(c, trip.baseCurrency, todayStr());
+    document.getElementById('conv-' + c).value = rate;
+    previewConvert(c);
+    const [, m, d] = date.split('-');
+    el.textContent += `（${Number(m)}/${Number(d)} 國際市場匯率）`;
+  } catch (e) {
+    el.textContent = '抓不到匯率，請手動輸入';
+  }
+}
+
+function convertCurrency(c) {
+  const base = trip.baseCurrency;
+  const rate = parseFloat(document.getElementById('conv-' + c).value);
+  if (!(rate > 0)) { alert('請輸入匯率'); return; }
+  const list = expenses.filter(e => !isConverted(e) && e.currency === c);
+  const paidList = transfers.filter(t => t.currency === c);
+  if (!confirm(`把 ${list.length} 筆 ${c} 支出，用 1 ${c} = ${rate} ${base} 換算？\n換算後可以到各筆支出個別修改。`)) return;
+
+  // 一次寫入（batch）：全部成功或全部失敗，不會只換一半
+  const batch = db.batch();
+  for (const e of list) {
+    const baseAmount = convertToBase(e.amount, c, rate);
+    const ids = Object.keys(e.shares);
+    const parts = allocate(baseAmount, ids.map(id => e.shares[id]));
+    const baseShares = {};
+    ids.forEach((id, i) => { baseShares[id] = parts[i]; });
+    // 舊格式的支出順便存成新格式（amount、shares 用換算過的新值）
+    batch.update(tripRef().collection('expenses').doc(e.id),
+      { rate, baseAmount, baseShares, amount: e.amount, shares: e.shares, v: 2, updatedAt: Date.now() });
+  }
+  // 已經用外幣還過的錢，也一起換成結算幣
+  for (const t of paidList) {
+    batch.update(tripRef().collection('transfers').doc(t.id),
+      { amount: convertToBase(t.amount, c, rate), currency: base, v: 2 });
+  }
+  batch.update(tripRef(), { ['rates.' + c]: rate });
+  batch.commit().catch(onWriteError);
+}
+
 // 產生一段文字，可以直接貼到 LINE 群組
 async function shareSettle() {
   const base = trip.baseCurrency;
-  const bal = computeBalances();
-  const todo = computeTransfers(bal);
-  const total = expenses.reduce((a, e) => a + e.baseAmount, 0);
-  let text = `【${trip.name}】結算\n總花費 ${formatAmount(total, base)}\n\n`;
-  text += todo.length
-    ? todo.map(t => `${memberName(t.fromId)} → ${memberName(t.toId)}：${formatAmount(t.amount, base)}`).join('\n')
-    : '大家都兩清了！';
-  text += '\n\n每人實際花費：\n' + trip.members.map(m => `${m.name} ${formatAmount(bal[m.id].owed, base)}`).join('\n');
+  const groups = settleGroups();
+  const mainBal = computeBalances(groups[0]);
+  let text = `【${trip.name}】結算\n總花費 ${sumExpenses(expenses).text}\n`;
+  for (const g of groups) {
+    if (!g.converted) text += `\n${g.currency}（尚未換算）：\n`;
+    else if (!g.list.length) continue;
+    else text += '\n';
+    const todo = computeTransfers(computeBalances(g));
+    text += todo.length
+      ? todo.map(t => `${memberName(t.fromId)} → ${memberName(t.toId)}：${formatAmount(t.amount, g.currency)}`).join('\n')
+      : '大家都兩清了！';
+    text += '\n';
+  }
+  text += `\n每人實際花費（${base}）：\n` + trip.members.map(m => `${m.name} ${formatAmount(mainBal[m.id].owed, base)}`).join('\n');
 
   try {
     if (navigator.share) {           // 手機：跳出分享選單（可選 LINE）
@@ -1316,8 +1584,7 @@ function renderCalcQuick() {
   box.innerHTML = '';
   if (calc.kind !== 'custom') return;
   const cur = draft.currency;
-  const d = CURRENCIES[cur].decimals;
-  const toText = v => (v / 10 ** d).toFixed(d);
+  const toText = v => minorToText(v, cur);
   const total = parseAmount(document.getElementById('f-amount').value || '0', cur) || 0;
   if (!total) return;
   const n = draft.participants.length;
@@ -1351,7 +1618,7 @@ function calcConfirm() {
     if (v === null) { alert('算式不完整'); return; }
     if (v < 0) { alert('金額不能是負數'); return; }
     text = roundForCurrency(v, cur);
-    if (CURRENCIES[cur].decimals && /\.0+$/.test(text)) text = text.replace(/\.0+$/, '');   // 12.00 顯示成 12
+    text = text.replace(/\.0+$/, '');   // 12.00 顯示成 12
   }
   const { input, kind, memberId } = calc;
   input.value = text;
@@ -1371,6 +1638,209 @@ document.addEventListener('keydown', e => {
   else return;
   e.preventDefault();
 });
+
+
+/* =========================================================
+   照片
+   ---------------------------------------------------------
+   手機照片動輒 3–5 MB，Firestore 一筆資料最多 1 MB，
+   所以上傳前先在手機上縮小（最長邊 1280 像素）、壓成 JPEG，
+   通常只剩 150–300 KB，收據上的字還是看得清楚。
+   ========================================================= */
+const MAX_PHOTOS = 4;
+const MAX_PHOTO_CHARS = 700000;   // 壓縮後的文字長度上限（約 500 KB），留空間給 1 MB 限制
+
+function compressImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let maxSide = 1280, quality = 0.7;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+        const w = Math.round(img.naturalWidth * scale);
+        const h = Math.round(img.naturalHeight * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff';            // 透明背景的圖片（PNG 截圖）改成白底
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        const data = canvas.toDataURL('image/jpeg', quality);
+        if (data.length <= MAX_PHOTO_CHARS) { resolve(data); return; }
+        // 還是太大：先降畫質，再縮尺寸
+        if (quality > 0.5) quality -= 0.1;
+        else maxSide = Math.round(maxSide * 0.8);
+      }
+      reject(new Error('圖片太大，壓縮不下來'));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('無法讀取這個檔案，請換一張圖片')); };
+    img.src = url;
+  });
+}
+
+async function addPhotos(fileList) {
+  const files = [...fileList];
+  const room = MAX_PHOTOS - draft.photos.length;
+  if (files.length > room) alert(`最多 ${MAX_PHOTOS} 張，只會加入前 ${room} 張`);
+  draft.photosBusy = true;
+  renderPhotos();
+  for (const f of files.slice(0, room)) {
+    try {
+      draft.photos.push({ id: newId(), data: await compressImage(f), isNew: true });
+    } catch (e) {
+      alert(e.message);
+    }
+    renderPhotos();
+  }
+  draft.photosBusy = false;
+  renderPhotos();
+}
+
+function removePhoto(i) {
+  if (!confirm('刪除這張照片？（按儲存後才會真的刪除）')) return;
+  const [p] = draft.photos.splice(i, 1);
+  if (!p.isNew) draft.removedPhotoIds.push(p.id);
+  renderPhotos();
+}
+
+// 編輯支出時，從雲端讀回照片
+function loadPhotos(e) {
+  const ids = e.photoIds || [];
+  if (!ids.length) { renderPhotos(); return; }
+  const editingId = e.id;
+  draft.photosLoading = true;
+  renderPhotos();
+  Promise.all(ids.map(id => tripRef().collection('photos').doc(id).get()))
+    .then(docs => {
+      if (!draft || draft.editingId !== editingId) return;   // 已經離開這筆了
+      draft.photos = docs.filter(d => d.exists).map(d => ({ id: d.id, data: d.data().data, isNew: false }));
+    })
+    .catch(err => { console.error(err); alert('照片讀取失敗：' + (err.code || err.message)); })
+    .finally(() => {
+      if (!draft || draft.editingId !== editingId) return;
+      draft.photosLoading = false;
+      renderPhotos();
+    });
+}
+
+function renderPhotos() {
+  const box = document.getElementById('f-photos');
+  if (draft.photosLoading) { box.innerHTML = '<div class="hint" style="grid-column:1/-1">照片載入中…</div>'; return; }
+  let html = draft.photos.map((p, i) =>
+    `<div class="thumb"><img src="${p.data}" alt="照片 ${i + 1}" onclick="viewPhoto(${i})">` +
+    `<button class="rm" onclick="removePhoto(${i})" aria-label="刪除照片">✕</button></div>`).join('');
+  if (draft.photosBusy) html += '<div class="add-photo">處理中…</div>';
+  else if (draft.photos.length < MAX_PHOTOS)
+    html += `<button class="add-photo" onclick="document.getElementById('f-photo-input').click()"><span>📷</span>加照片</button>`;
+  box.innerHTML = html;
+}
+
+function viewPhoto(i) {
+  document.getElementById('viewer-img').src = draft.photos[i].data;
+  document.getElementById('photo-viewer').classList.add('show');
+}
+function closeViewer() {
+  document.getElementById('photo-viewer').classList.remove('show');
+  document.getElementById('viewer-img').src = '';
+}
+
+
+/* =========================================================
+   自動抓匯率
+   ---------------------------------------------------------
+   資料來源：fawazahmed0 Exchange API（免費、免註冊、每天更新）
+     https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@2027-02-10/v1/currencies/usd.min.json
+     → { "date": "2027-02-10", "usd": { "twd": 32.45, "jpy": 150.2, ... } }
+   主要網址失敗時改用備援網址（官方建議一定要做）。
+   這是國際市場中間價，不是台灣銀行的牌告匯率。
+   ========================================================= */
+const RATE_EARLIEST = '2024-03-02';   // 這個來源最早的資料日期
+const rateCache = {};                 // 同一天同幣別只抓一次
+let rateRequestNo = 0;                // 連續切換時，只採用最後一次的結果
+
+async function fetchJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.json();
+}
+
+// 取得 1 單位 from 幣別 = 多少 to 幣別；回傳 { rate, date(實際資料日期) }
+// 快取存的是「請求本身」，同時重複呼叫也只會真的連線一次
+function getRate(from, to, date) {
+  const key = `${from}-${to}-${date}`;
+  if (!rateCache[key]) {
+    rateCache[key] = requestRate(from, to, date).catch(e => { delete rateCache[key]; throw e; });
+  }
+  return rateCache[key];
+}
+
+async function requestRate(from, to, date) {
+  const f = from.toLowerCase(), t = to.toLowerCase();
+  const urls = d => [
+    `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@${d}/v1/currencies/${f}.min.json`,
+    `https://${d}.currency-api.pages.dev/v1/currencies/${f}.min.json`
+  ];
+  // 今天或未來的日期可能還沒有資料，就改抓最新的
+  const tries = [...urls(date)];
+  if (date >= todayStr()) tries.push(...urls('latest'));
+  let lastErr;
+  for (const url of tries) {
+    try {
+      const data = await fetchJSON(url);
+      const rate = data[f] && data[f][t];
+      if (!rate) throw new Error('沒有這個幣別的資料');
+      return { rate: parseFloat(rate.toPrecision(6)), date: data.date || date };
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+}
+
+function setRateMode(m) {
+  draft.rateMode = m;
+  updateForm();
+  if (m === 'now' && !document.getElementById('f-rate').value) { draft.rateManual = false; autoFetchRate(); }
+}
+
+function setRateSource(text) {
+  document.getElementById('rate-source').textContent = text;
+}
+
+// 表單上的「抓匯率」按鈕
+async function fetchRateForForm() {
+  if (!draft) return;
+  const cur = draft.currency, base = trip.baseCurrency;
+  if (cur === base) return;
+  const date = document.getElementById('f-date').value || todayStr();
+  if (date < RATE_EARLIEST) { setRateSource('這個日期太早，沒有匯率資料，請手動輸入'); return; }
+  if (!navigator.onLine) { setRateSource('目前離線，先用上次的匯率，或手動輸入'); return; }
+
+  const myNo = ++rateRequestNo;
+  const btn = document.getElementById('rate-fetch-btn');
+  btn.disabled = true;
+  setRateSource('正在抓匯率…');
+  try {
+    const { rate, date: gotDate } = await getRate(cur, base, date);
+    if (myNo !== rateRequestNo || !draft || draft.currency !== cur) return;   // 使用者已經換了幣別或日期
+    document.getElementById('f-rate').value = rate;
+    draft.rateManual = false;
+    const [, m, d] = gotDate.split('-');
+    setRateSource(`${Number(m)}/${Number(d)} 國際市場匯率` + (gotDate !== date ? '（所選日期還沒有資料，用最新的）' : ''));
+    updateForm();
+  } catch (e) {
+    console.error(e);
+    if (myNo === rateRequestNo) setRateSource('抓不到匯率，請手動輸入');
+  } finally {
+    if (myNo === rateRequestNo) btn.disabled = false;
+  }
+}
+
+// 換幣別、換日期、開新表單時自動抓；但使用者自己改過的匯率不會被蓋掉
+function autoFetchRate() {
+  if (!draft || draft.rateManual || draft.rateMode === 'later') return;
+  fetchRateForForm();
+}
 
 /* ---------- 啟動（永遠放在 script 最後面，所有變數和函式都定義好之後才執行） ---------- */
 startApp();

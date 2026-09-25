@@ -341,6 +341,13 @@
 
   <!-- 加入旅程（打開邀請連結時出現） -->
   <section class="page" id="page-join">
+    <div class="card" id="inapp-warning" style="display:none">
+      <h2>⚠️ 請改用瀏覽器開啟</h2>
+      <p class="hint" style="margin-top:0">你正在 LINE（或其他 App）內建的瀏覽器裡。這裡可以加入旅程，但<b>無法用 Google 登入</b>，資料也比較容易遺失。</p>
+      <button class="btn" onclick="openInExternalBrowser()">用手機瀏覽器開啟</button>
+      <p class="hint">如果按了沒反應：點右上角「⋯」或分享圖示，選「用 Safari 開啟」或「用預設瀏覽器開啟」。</p>
+    </div>
+    <div class="card account-card"></div>
     <div class="card">
       <h2 id="join-title">加入旅程</h2>
       <p class="hint">請點選你的名字</p>
@@ -574,7 +581,8 @@ const db = firebase.firestore();
 // 開啟離線快取：沒網路時照樣能記帳，有網路後自動上傳
 db.enablePersistence({ synchronizeTabs: true }).catch(e => console.warn('離線快取無法開啟', e.code));
 
-const CURRENT_TRIP_KEY = 'travelSplit_currentTrip';   // 這支手機上次打開的旅程
+const CURRENT_TRIP_KEY = 'travelSplit_currentTrip';
+const PENDING_JOIN_KEY = 'travelSplit_pendingJoin';   // 打開了邀請連結、但還沒完成加入的旅程   // 這支手機上次打開的旅程
 const LAST_CURRENCY_KEY = 'travelSplit_lastCurrency';
 const METHOD_KEY = 'travelSplit_payMethod';            // 這支手機上次用的付款方式
 const METHOD_OTHER_KEY = 'travelSplit_payMethodOther'; // 上次「其他」填的文字
@@ -656,6 +664,7 @@ function goHome(opts = {}) {
     if (opts.fromHistory) history.pushState({ page }, '');   // 取消離開：把紀錄補回去
     return;
   }
+  if (page === 'page-join') { localStorage.removeItem(PENDING_JOIN_KEY); joinTrip = null; }
   if (trip) showPage('page-list', opts);
   else if (prevTripId) { const id = prevTripId; prevTripId = null; openTrip(id); }
   else showTripPicker();
@@ -707,9 +716,14 @@ function startApp() {
 
 // 登入後決定要打開哪一頁
 async function routeAfterLogin() {
-    const joinId = new URLSearchParams(location.search).get('join');
-    if (joinId) {
+    // 邀請連結的旅程先記下來：中途去登入 Google、切換帳號，回來還能繼續加入
+    const urlJoin = new URLSearchParams(location.search).get('join');
+    if (urlJoin) {
+      localStorage.setItem(PENDING_JOIN_KEY, urlJoin);
       history.replaceState(null, '', location.pathname);   // 把 ?join= 從網址拿掉
+    }
+    const joinId = localStorage.getItem(PENDING_JOIN_KEY);
+    if (joinId) {
       await openJoin(joinId);
       return;
     }
@@ -830,13 +844,20 @@ function openTrip(id) {
 async function openJoin(id) {
   try {
     const doc = await tripRef(id).get();
-    if (!doc.exists) { alert('邀請連結無效或旅程已刪除'); showTripPicker(); return; }
+    if (!doc.exists) {
+      localStorage.removeItem(PENDING_JOIN_KEY);
+      alert('邀請連結無效或旅程已刪除'); showTripPicker(); return;
+    }
     const data = doc.data();
-    if (data.memberUids.includes(myUid)) { openTrip(id); return; }   // 已經加入過了
+    if (data.memberUids.includes(myUid)) {   // 已經加入過了（例如登入 Google 後，發現之前就加入過）
+      localStorage.removeItem(PENDING_JOIN_KEY);
+      openTrip(id); return;
+    }
     joinTrip = { id, ...data };
     document.getElementById('tabs').classList.remove('show');
     setHeader(data.name, '加入旅程');
     document.getElementById('join-title').textContent = `加入「${data.name}」`;
+    document.getElementById('inapp-warning').style.display = isInAppBrowser() ? 'block' : 'none';
     document.getElementById('join-members').innerHTML = data.members.map(m =>
       `<button class="join-pick" onclick="joinAs('${m.id}')">${escapeHTML(m.name)}` +
       `${m.uid ? '<small>已有手機加入</small>' : ''}</button>`).join('');
@@ -867,13 +888,24 @@ function finishJoin(members) {
   tripRef(id).update({
     members,
     memberUids: firebase.firestore.FieldValue.arrayUnion(myUid)
-  }).then(() => openTrip(id)).catch(onWriteError);
+  }).then(() => { localStorage.removeItem(PENDING_JOIN_KEY); openTrip(id); }).catch(onWriteError);
   joinTrip = null;
 }
 
 /* ---------- 設定頁 ---------- */
+// openExternalBrowser=1：LINE 的功能，從 LINE 點開這個連結時，會直接用手機瀏覽器開啟
 function inviteUrl() {
-  return location.origin + location.pathname + '?join=' + tripId;
+  return location.origin + location.pathname + '?join=' + tripId + '&openExternalBrowser=1';
+}
+
+// 是不是在 LINE、Facebook、Instagram 這類 App 內建的瀏覽器裡（Google 不允許在這裡登入）
+function isInAppBrowser() {
+  return /Line\/|FBAN|FBAV|Instagram/i.test(navigator.userAgent);
+}
+function openInExternalBrowser() {
+  const join = localStorage.getItem(PENDING_JOIN_KEY) || tripId;
+  const url = location.origin + location.pathname + '?' + (join ? 'join=' + join + '&' : '') + 'openExternalBrowser=1';
+  location.href = url;
 }
 async function shareInvite() {
   const url = inviteUrl();
@@ -1929,7 +1961,7 @@ function renderAccount() {
   let html;
   if (u.isAnonymous) {
     html = `<h2>帳號</h2>
-      <p class="hint" style="margin-top:0">目前是<b>訪客</b>：旅程只存在這台裝置的瀏覽器。用 Google 登入後，手機、平板、電腦都能看到同樣的紀錄。</p>
+      <p class="hint" style="margin-top:0">目前是<b>訪客</b>：旅程只存在這台裝置的瀏覽器。用 Google 登入後，手機、平板、電腦都能看到同樣的紀錄。<br>先登入或先加入旅程都可以，順序不影響。</p>
       <button class="google-btn" onclick="loginWithGoogle()">${GOOGLE_ICON}用 Google 登入</button>`;
   } else {
     const email = u.email || (u.providerData[0] && u.providerData[0].email) || '';
@@ -1943,6 +1975,10 @@ function renderAccount() {
 }
 
 async function loginWithGoogle() {
+  if (isInAppBrowser()) {
+    if (confirm('LINE 等 App 內建的瀏覽器無法使用 Google 登入。\n要改用手機瀏覽器開啟嗎？')) openInExternalBrowser();
+    return;
+  }
   const provider = new firebase.auth.GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });   // 每次都讓你選帳號
   const user = auth.currentUser;
@@ -1951,7 +1987,8 @@ async function loginWithGoogle() {
     await user.linkWithPopup(provider);
     await auth.currentUser.reload();
     renderAccount();
-    alert('登入成功！之後在其他裝置用同一個 Google 帳號登入，就能看到這些旅程。');
+    alert('登入成功！之後在其他裝置用同一個 Google 帳號登入，就能看到這些旅程。' +
+      (currentPage() === 'page-join' ? '\n\n接著請點選你的名字，加入旅程。' : ''));
   } catch (e) {
     if (e.code === 'auth/credential-already-in-use' || e.code === 'auth/email-already-in-use') {
       // 情況 B：這個 Google 帳號之前用過
@@ -2026,7 +2063,7 @@ async function logout() {
    一直卡在「連線中」時，畫面上會顯示可能原因、錯誤訊息和版本，
    截圖給別人看就能判斷問題出在哪裡。
    ========================================================= */
-const APP_VERSION = '2026-09-25 統計頁＋回首頁';   // 每次改版更新，用來確認上傳的是不是最新檔案
+const APP_VERSION = '2026-09-25 修正邀請與登入';   // 每次改版更新，用來確認上傳的是不是最新檔案
 let authResolved = false;
 const diagErrors = [];
 

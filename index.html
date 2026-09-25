@@ -268,6 +268,8 @@
 </header>
 
 <main>
+  <!-- 連線有問題時才會出現：顯示可能原因和技術資訊 -->
+  <div class="card" id="diag" style="display:none"></div>
   <!-- 頁面 0：建立旅程（還沒有旅程時才出現） -->
   <section class="page" id="page-setup">
     <div class="card account-card"></div>
@@ -425,6 +427,7 @@
     </div>
     <button class="btn ghost" onclick="switchTrip()">切換／建立其他旅程</button>
     <button class="btn danger" id="delete-trip-btn" onclick="deleteTrip()">刪除這趟旅程</button>
+    <p class="hint" style="text-align:center;margin-top:20px" id="app-version"></p>
   </section>
 </main>
 
@@ -584,6 +587,8 @@ function startApp() {
       return;
     }
     myUid = user.uid;
+    authResolved = true;
+    hideDiag();
     renderAccount();
     if (switchingAccount) return;   // 正在切換帳號，等搬移完成再決定去哪一頁
     routeAfterLogin();
@@ -2148,8 +2153,79 @@ function renderItemDebts() {
   </details></div>`;
 }
 
+
+/* =========================================================
+   連線診斷
+   ---------------------------------------------------------
+   一直卡在「連線中」時，畫面上會顯示可能原因、錯誤訊息和版本，
+   截圖給別人看就能判斷問題出在哪裡。
+   ========================================================= */
+const APP_VERSION = '2026-09-25 逐筆還款＋診斷';   // 每次改版更新，用來確認上傳的是不是最新檔案
+let authResolved = false;
+const diagErrors = [];
+
+function logDiag(msg) {
+  diagErrors.push(`${new Date().toLocaleTimeString()} ${msg}`);
+  if (diagErrors.length > 8) diagErrors.shift();
+  if (document.getElementById('diag').style.display !== 'none') showDiag();   // 已經顯示中就更新
+}
+window.addEventListener('error', e => logDiag(e.message || '未知錯誤'));
+window.addEventListener('unhandledrejection', e => {
+  const r = e.reason || {};
+  logDiag(r.code || r.message || String(r));
+});
+
+let diagTitle = '';
+function showDiag(title) {
+  if (title) diagTitle = title;
+  const box = document.getElementById('diag');
+  const configOk = !String(firebaseConfig.apiKey).includes('請貼上');
+  const ua = navigator.userAgent;
+  const inApp = /Line\/|FBAN|FBAV|Instagram/i.test(ua);
+  box.innerHTML = `<h2>⚠️ ${escapeHTML(diagTitle)}</h2>
+    <p class="hint" style="margin-top:0">可以依序試試：</p>
+    <ol class="hint" style="padding-left:20px;margin:0">
+      <li>重新整理頁面</li>
+      <li>關掉這個網站的所有分頁，再重新打開</li>
+      ${inApp ? '<li><b>你正在 App 內建的瀏覽器裡</b>，請改用 Safari 或 Chrome 開啟</li>' : ''}
+      <li>確認沒有開無痕／私密瀏覽</li>
+      <li>還是不行，按下方「重設這台裝置」</li>
+    </ol>
+    <p class="hint">技術資訊（截圖這一段就好）：<br>
+      版本：${escapeHTML(APP_VERSION)}<br>
+      Firebase 設定碼：${configOk ? '已貼上' : '<b>還沒貼上</b>'}<br>
+      網路：${navigator.onLine ? '有連線' : '<b>離線</b>'}<br>
+      登入狀態：${auth.currentUser ? (auth.currentUser.isAnonymous ? '訪客' : 'Google') : '尚未完成'}<br>
+      瀏覽器：${escapeHTML(ua.slice(0, 140))}<br>
+      錯誤：${diagErrors.length ? diagErrors.map(escapeHTML).join('<br>') : '沒有'}</p>
+    <button class="btn" onclick="location.reload()">重新整理</button>
+    <button class="btn danger" onclick="resetDevice()">重設這台裝置</button>`;
+  box.style.display = 'block';
+}
+function hideDiag() {
+  document.getElementById('diag').style.display = 'none';
+}
+
+// 清掉這台裝置上的登入狀態和本機快取（雲端資料不會受影響）
+async function resetDevice() {
+  if (!confirm('重設後這台裝置會登出，並清除本機暫存。\n雲端上的旅程不會被刪除，重新用 Google 登入就會回來。\n\n注意：離線時記的、還沒上傳的帳會遺失。確定重設？')) return;
+  try { await auth.signOut(); } catch (e) {}
+  Object.keys(localStorage).filter(k => k.startsWith('travelSplit_')).forEach(k => localStorage.removeItem(k));
+  try {
+    if (indexedDB.databases) {
+      const dbs = await indexedDB.databases();
+      dbs.filter(d => /firebase|firestore/i.test(d.name || '')).forEach(d => indexedDB.deleteDatabase(d.name));
+    } else {
+      indexedDB.deleteDatabase('firebaseLocalStorageDb');
+    }
+  } catch (e) {}
+  setTimeout(() => location.reload(), 500);
+}
+
 /* ---------- 啟動（永遠放在 script 最後面，所有變數和函式都定義好之後才執行） ---------- */
+document.getElementById('app-version').textContent = '版本 ' + APP_VERSION;
 startApp();
+setTimeout(() => { if (!authResolved) showDiag('連線超過 15 秒還沒完成'); }, 15000);
 </script>
 </body>
 </html>

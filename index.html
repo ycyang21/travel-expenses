@@ -228,6 +228,36 @@
   .rate-row input { flex: 1; min-width: 0; }
   .rate-fetch { padding: 0 12px; border: 1px solid var(--stamp); border-radius: 8px; background: #fff; color: var(--stamp); white-space: nowrap; font-size: 15px; }
   .rate-fetch:disabled { opacity: .5; }
+
+  /* ===== 帳號 ===== */
+  .account-row { display: flex; align-items: center; gap: 10px; }
+  .account-row .who-am-i { flex: 1; min-width: 0; font-size: 15px; }
+  .account-row .who-am-i small { display: block; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+  .google-btn {
+    display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; margin-top: 12px;
+    padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); font-weight: 600;
+  }
+  .google-btn svg { width: 18px; height: 18px; }
+
+  /* ===== 逐筆還款 ===== */
+  .check-row { display: flex; align-items: flex-start; gap: 10px; margin-top: 14px; color: var(--ink); font-size: 16px; }
+  .check-row input { width: 22px; height: 22px; margin: 1px 0 0; flex: none; accent-color: var(--plus); }
+  .check-row small { display: block; color: var(--muted); font-size: 13px; }
+  details.items > summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+  details.items > summary::-webkit-details-marker { display: none; }
+  details.items > summary h2 { margin: 0; }
+  details.items > summary .arrow { color: var(--muted); transition: transform .2s; }
+  details.items[open] > summary .arrow { transform: rotate(90deg); }
+  .item-exp { border-top: 1px solid var(--line); padding: 12px 0 4px; margin-top: 12px; }
+  .item-exp .head { display: flex; justify-content: space-between; font-weight: 600; }
+  .item-exp .head small { font-weight: 400; color: var(--muted); }
+  .item-debt { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
+  .item-debt .txt { flex: 1; }
+  .item-debt.paid .txt { color: var(--muted); text-decoration: line-through; }
+  .item-debt .done-btn, .item-debt .undo-btn { padding: 6px 12px; border-radius: 8px; background: #fff; white-space: nowrap; font-size: 14px; }
+  .item-debt .done-btn { border: 1px solid var(--plus); color: var(--plus); }
+  .item-debt .undo-btn { border: 1px solid var(--line); color: var(--muted); }
+  .settled-tag { color: var(--plus); }
 </style>
 </head>
 <body>
@@ -240,6 +270,7 @@
 <main>
   <!-- 頁面 0：建立旅程（還沒有旅程時才出現） -->
   <section class="page" id="page-setup">
+    <div class="card account-card"></div>
     <div class="card" id="my-trips-card" style="display:none">
       <h2>我的旅程</h2>
       <div id="my-trips"></div>
@@ -340,6 +371,10 @@
       <div id="payer-box">
         <label>誰付的錢</label>
         <div class="pick-list" id="f-payer"></div>
+        <label class="check-row">
+          <input type="checkbox" id="f-settled">
+          <span>當場已結清<small id="f-settled-hint">其他人已經把自己那份還給付款人，結算時不會再出現這筆欠款</small></span>
+        </label>
       </div>
 
       <label>付款方式</label>
@@ -371,6 +406,7 @@
 
   <!-- 頁面 4：設定 -->
   <section class="page" id="page-settings">
+    <div class="card account-card"></div>
     <div class="card">
       <h2>邀請旅伴</h2>
       <p class="hint">把連結傳給旅伴，他們打開後點選自己的名字就能一起記帳。</p>
@@ -548,6 +584,14 @@ function startApp() {
       return;
     }
     myUid = user.uid;
+    renderAccount();
+    if (switchingAccount) return;   // 正在切換帳號，等搬移完成再決定去哪一頁
+    routeAfterLogin();
+  });
+}
+
+// 登入後決定要打開哪一頁
+async function routeAfterLogin() {
     const joinId = new URLSearchParams(location.search).get('join');
     if (joinId) {
       history.replaceState(null, '', location.pathname);   // 把 ?join= 從網址拿掉
@@ -557,7 +601,6 @@ function startApp() {
     const saved = localStorage.getItem(CURRENT_TRIP_KEY);
     if (saved) openTrip(saved);
     else showTripPicker();
-  });
 }
 
 /* ---------- 旅程列表（沒有打開任何旅程時） ---------- */
@@ -920,6 +963,9 @@ function openAddForm() {
   draft.rateManual = false;
   draft.rateMode = localStorage.getItem(RATE_MODE_KEY) || 'now';
   draft.method = localStorage.getItem(METHOD_KEY) || null;
+  draft.settledBefore = [];   // 編輯前，這筆支出已經還款的人
+  document.getElementById('f-settled').checked = false;
+  document.getElementById('f-settled-hint').textContent = '其他人已經把自己那份還給付款人，結算時不會再出現這筆欠款';
   document.getElementById('f-method-other').value = localStorage.getItem(METHOD_OTHER_KEY) || '';
   setRateSource('');
   document.getElementById('save-btn').textContent = '儲存支出';
@@ -957,6 +1003,13 @@ function openEditForm(id) {
   draft.rateManual = true;
   draft.rateMode = (e.currency !== trip.baseCurrency && e.rate == null) ? 'later' : 'now';
   draft.method = e.paymentMethod || null;
+  const debtors = expenseDebts(e).map(d => d.fromId);
+  draft.settledBefore = transfers.filter(t => t.expenseId === e.id).map(t => t.fromId);
+  const allPaid = debtors.length > 0 && debtors.every(id => draft.settledBefore.includes(id));
+  document.getElementById('f-settled').checked = allPaid;
+  document.getElementById('f-settled-hint').textContent = (!allPaid && draft.settledBefore.length)
+    ? `目前已還：${draft.settledBefore.map(memberName).join('、')}。勾選代表全部的人都還了`
+    : '其他人已經把自己那份還給付款人，結算時不會再出現這筆欠款';
   document.getElementById('f-method-other').value = e.paymentMethodOther || '';
   setRateSource('');
   document.getElementById('save-btn').textContent = '儲存修改';
@@ -1180,6 +1233,9 @@ function saveExpense() {
     col.doc(expId).set({ id: expId, createdAt: now, createdBy: myUid, ...data }).catch(onWriteError);
   }
 
+  // 同步這筆支出的逐筆還款紀錄
+  syncExpenseRepayments({ id: expId, ...data }, document.getElementById('f-settled').checked, draft.settledBefore);
+
   // 記住這次的幣別（只存在這支手機）和匯率（旅伴共用）
   localStorage.setItem(LAST_CURRENCY_KEY, cur);
   if (cur !== base) localStorage.setItem(RATE_MODE_KEY, draft.rateMode);
@@ -1197,6 +1253,8 @@ function deleteExpense() {
   if (!confirm('確定刪除這筆支出？')) return;
   const e = expenses.find(x => x.id === draft.editingId);
   (e && e.photoIds || []).forEach(id => tripRef().collection('photos').doc(id).delete().catch(onWriteError));
+  transfers.filter(t => t.expenseId === draft.editingId)
+    .forEach(t => tripRef().collection('transfers').doc(t.id).delete().catch(onWriteError));
   tripRef().collection('expenses').doc(draft.editingId).delete().catch(onWriteError);
   showPage('page-list');
 }
@@ -1249,7 +1307,7 @@ function renderList() {
       return `<button class="exp" onclick="openEditForm('${e.id}')">
         <span class="icon">${cat.icon}</span>
         <span class="mid"><div class="title">${escapeHTML(e.title)}</div>
-          <div class="who">${e.splitType === 'self' ? `各付各的${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}・${n} 人` : `${escapeHTML(memberName(e.payerId))} 付款${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}・${n} 人分攤`}${e.note ? '・📝' : ''}${(e.photoIds || []).length ? `・📷${e.photoIds.length}` : ''}</div></span>
+          <div class="who">${e.splitType === 'self' ? `各付各的${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}・${n} 人` : `${escapeHTML(memberName(e.payerId))} 付款${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}・${n} 人分攤`}${isFullySettled(e) ? '・<span class="settled-tag">✓已結清</span>' : ''}${e.note ? '・📝' : ''}${(e.photoIds || []).length ? `・📷${e.photoIds.length}` : ''}</div></span>
         <span class="money">${formatAmount(e.amount, e.currency)}${converted}</span>
       </button>`;
     }).join('');
@@ -1378,6 +1436,9 @@ function renderSettle() {
     html += `<div class="card"><h2>要怎麼還</h2>${transferRows(computeTransfers(mainBal), base)}</div>`;
   }
 
+  // 2.5 逐筆明細（收合）
+  html += renderItemDebts();
+
   // 3. 還沒換算的外幣，也可以直接用外幣互相還
   for (const g of foreignGroups) {
     html += `<div class="card"><h2>要怎麼還（${g.currency}，尚未換算）</h2>` +
@@ -1410,7 +1471,7 @@ function renderSettle() {
     html += [...transfers].sort((a, b) => b.createdAt - a.createdAt).map(t => `<div class="transfer paid">
       <div class="flow">${escapeHTML(memberName(t.fromId))} 給 ${escapeHTML(memberName(t.toId))}
         <span class="amt">${formatAmount(t.amount, t.currency)}</span>
-        <span class="detail">${t.date}</span></div>
+        <span class="detail">${t.date}${t.expenseId ? `・${escapeHTML((expenses.find(e => e.id === t.expenseId) || {}).title || '')}` : ''}</span></div>
       <button class="undo-btn" onclick="undoPaid('${t.id}')">取消</button>
     </div>`).join('');
     html += '</div>';
@@ -1473,20 +1534,23 @@ function convertCurrency(c) {
 
   // 一次寫入（batch）：全部成功或全部失敗，不會只換一半
   const batch = db.batch();
+  const newBaseShares = {};   // 支出 id → 換算後每人金額
   for (const e of list) {
     const baseAmount = convertToBase(e.amount, c, rate);
     const ids = Object.keys(e.shares);
     const parts = allocate(baseAmount, ids.map(id => e.shares[id]));
     const baseShares = {};
     ids.forEach((id, i) => { baseShares[id] = parts[i]; });
+    newBaseShares[e.id] = baseShares;
     // 舊格式的支出順便存成新格式（amount、shares 用換算過的新值）
     batch.update(tripRef().collection('expenses').doc(e.id),
       { rate, baseAmount, baseShares, amount: e.amount, shares: e.shares, v: 2, updatedAt: Date.now() });
   }
   // 已經用外幣還過的錢，也一起換成結算幣
   for (const t of paidList) {
-    batch.update(tripRef().collection('transfers').doc(t.id),
-      { amount: convertToBase(t.amount, c, rate), currency: base, v: 2 });
+    const linked = t.expenseId && newBaseShares[t.expenseId];
+    const amount = linked ? (linked[t.fromId] || 0) : convertToBase(t.amount, c, rate);
+    batch.update(tripRef().collection('transfers').doc(t.id), { amount, currency: base, v: 2 });
   }
   batch.update(tripRef(), { ['rates.' + c]: rate });
   batch.commit().catch(onWriteError);
@@ -1878,6 +1942,210 @@ async function fetchRateForForm() {
 function autoFetchRate() {
   if (!draft || draft.rateManual || draft.rateMode === 'later') return;
   fetchRateForForm();
+}
+
+
+/* =========================================================
+   Google 登入（跨裝置同步）
+   ---------------------------------------------------------
+   沒登入時是「訪客」（匿名登入），身分只綁在這台裝置的瀏覽器。
+   用 Google 登入後，身分綁在 Google 帳號上，任何裝置登入同一個帳號，
+   都會是同一個 uid，看得到同樣的旅程。
+
+   兩種情況：
+   A. 這個 Google 帳號第一次使用：把訪客身分「升級」成 Google 帳號
+      （linkWithPopup），uid 不變，原本的旅程直接保留。
+   B. 這個 Google 帳號已經在別台裝置用過：切換成那個帳號，
+      並把這台裝置上訪客身分參加的旅程，一起搬到 Google 帳號底下。
+   ========================================================= */
+let switchingAccount = false;
+
+const GOOGLE_ICON = '<svg viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.4 30.2 0 24 0 14.6 0 6.6 5.4 2.7 13.2l7.8 6.1C12.4 13.6 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.5 5.8c4.4-4.1 7.1-10.1 7.1-17.5z"/><path fill="#FBBC05" d="M10.5 28.7c-.5-1.4-.8-3-.8-4.7s.3-3.2.8-4.7l-7.8-6.1C1 16.6 0 20.2 0 24s1 7.4 2.7 10.8l7.8-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.5-5.8c-2.1 1.4-4.8 2.3-8.4 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.8 6.1C6.6 42.6 14.6 48 24 48z"/></svg>';
+
+function renderAccount() {
+  const u = auth.currentUser;
+  if (!u) return;
+  let html;
+  if (u.isAnonymous) {
+    html = `<h2>帳號</h2>
+      <p class="hint" style="margin-top:0">目前是<b>訪客</b>：旅程只存在這台裝置的瀏覽器。用 Google 登入後，手機、平板、電腦都能看到同樣的紀錄。</p>
+      <button class="google-btn" onclick="loginWithGoogle()">${GOOGLE_ICON}用 Google 登入</button>`;
+  } else {
+    const email = u.email || (u.providerData[0] && u.providerData[0].email) || '';
+    html = `<h2>帳號</h2>
+      <div class="account-row">
+        <div class="who-am-i">已用 Google 登入<small>${escapeHTML(email)}</small></div>
+        <button class="small-btn" style="background:#fff;color:var(--muted);border:1px solid var(--line)" onclick="logout()">登出</button>
+      </div>`;
+  }
+  document.querySelectorAll('.account-card').forEach(el => { el.innerHTML = html; });
+}
+
+async function loginWithGoogle() {
+  const provider = new firebase.auth.GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: 'select_account' });   // 每次都讓你選帳號
+  const user = auth.currentUser;
+  try {
+    // 情況 A：訪客升級成 Google 帳號（uid 不變）
+    await user.linkWithPopup(provider);
+    await auth.currentUser.reload();
+    renderAccount();
+    alert('登入成功！之後在其他裝置用同一個 Google 帳號登入，就能看到這些旅程。');
+  } catch (e) {
+    if (e.code === 'auth/credential-already-in-use' || e.code === 'auth/email-already-in-use') {
+      // 情況 B：這個 Google 帳號之前用過
+      const cred = e.credential || firebase.auth.GoogleAuthProvider.credentialFromError(e);
+      if (cred) await switchToExistingAccount(cred);
+      else alert('登入失敗，請再試一次');
+    } else if (e.code === 'auth/popup-closed-by-user' || e.code === 'auth/cancelled-popup-request') {
+      // 使用者自己關掉視窗，不用提示
+    } else if (e.code === 'auth/popup-blocked') {
+      alert('登入視窗被瀏覽器擋住了，請允許彈出式視窗後再試一次');
+    } else if (e.code === 'auth/unauthorized-domain') {
+      alert('這個網址還沒加入 Firebase 的「授權網域」，請先到 Firebase 設定');
+    } else if (e.code === 'auth/operation-not-allowed') {
+      alert('Firebase 還沒開啟 Google 登入，請先到 Firebase 設定');
+    } else {
+      console.error(e);
+      alert('登入失敗：' + (e.code || e.message));
+    }
+  }
+}
+
+async function switchToExistingAccount(cred) {
+  const oldUid = myUid;
+  switchingAccount = true;
+  setHeader('旅途分帳', '切換帳號中…');
+  try {
+    // 1. 先記下訪客身分參加的旅程（切換之後就查不到了）
+    const snap = await db.collection('trips').where('memberUids', 'array-contains', oldUid).get();
+    const tripIds = snap.docs.map(d => d.id);
+
+    // 2. 切換到 Google 帳號
+    stopListening();
+    const result = await auth.signInWithCredential(cred);
+    const newUid = result.user.uid;
+    myUid = newUid;
+
+    // 3. 把這些旅程裡「我」的身分換成 Google 帳號
+    for (const id of tripIds) {
+      const doc = await tripRef(id).get();
+      if (!doc.exists) continue;
+      const d = doc.data();
+      if (!d.memberUids.includes(newUid)) {
+        const members = d.members.map(m => m.uid === oldUid ? { ...m, uid: newUid } : m);
+        await tripRef(id).update({ members, memberUids: firebase.firestore.FieldValue.arrayUnion(newUid) });
+      }
+      // 訪客建立的旅程，建立者也換成 Google 帳號（才能刪除旅程）
+      if (d.createdBy === oldUid) await tripRef(id).update({ createdBy: newUid });
+    }
+    renderAccount();
+    alert('已切換到你的 Google 帳號' + (tripIds.length ? `，並把這台裝置上的 ${tripIds.length} 趟旅程一起帶過去。` : '。'));
+  } catch (e) {
+    console.error(e);
+    alert('切換帳號時發生問題：' + (e.code || e.message));
+  } finally {
+    switchingAccount = false;
+    routeAfterLogin();
+  }
+}
+
+async function logout() {
+  if (!confirm('確定登出？登出後這台裝置會變回訪客，要再用 Google 登入才看得到你的旅程。')) return;
+  stopListening();
+  localStorage.removeItem(CURRENT_TRIP_KEY);
+  await auth.signOut();   // onAuthStateChanged 會自動再以訪客身分登入，並回到旅程列表
+}
+
+
+/* =========================================================
+   逐筆還款
+   ---------------------------------------------------------
+   還款紀錄（transfers）多一個欄位 expenseId，代表「還的是哪一筆支出」。
+   結算的算法不用改：它本來就會把所有還款紀錄算進去，
+   所以逐筆還的錢，會自動從「要怎麼還」裡扣掉。
+   ========================================================= */
+let itemsOpen = false;   // 逐筆明細是否展開（重新整理畫面時保持原狀）
+
+// 一筆支出裡，誰欠付款人多少（用結算時的幣別：已換算用結算幣，未換算用外幣）
+function expenseDebts(e) {
+  if (e.splitType === 'self' || !e.payerId) return [];
+  const conv = isConverted(e);
+  const shares = conv ? e.baseShares : e.shares;
+  const currency = conv ? trip.baseCurrency : e.currency;
+  return Object.entries(shares)
+    .filter(([id, v]) => id !== e.payerId && v > 0)
+    .map(([id, v]) => ({ fromId: id, toId: e.payerId, amount: v, currency }));
+}
+
+function isFullySettled(e) {
+  const debts = expenseDebts(e);
+  if (!debts.length) return false;
+  const paid = transfers.filter(t => t.expenseId === e.id).map(t => t.fromId);
+  return debts.every(d => paid.includes(d.fromId));
+}
+
+function writeRepayment(expenseId, d) {
+  const id = newId();
+  tripRef().collection('transfers').doc(id).set({
+    id, expenseId, fromId: d.fromId, toId: d.toId, amount: d.amount, currency: d.currency,
+    date: todayStr(), createdAt: Date.now(), createdBy: myUid, v: 2
+  }).catch(onWriteError);
+}
+
+// 儲存支出後呼叫：金額、付款人可能改了，所以先刪掉舊的，再依最新金額重建
+function syncExpenseRepayments(e, allChecked, paidBefore) {
+  const debts = expenseDebts(e);
+  let keep;
+  if (allChecked) keep = debts.map(d => d.fromId);                     // 勾選：全部都還了
+  else if (debts.length && debts.every(d => paidBefore.includes(d.fromId))) keep = [];   // 原本全還，現在取消勾選
+  else keep = paidBefore;                                               // 沒動：保留原本部分還款的人
+  transfers.filter(t => t.expenseId === e.id)
+    .forEach(t => tripRef().collection('transfers').doc(t.id).delete().catch(onWriteError));
+  debts.filter(d => keep.includes(d.fromId)).forEach(d => writeRepayment(e.id, d));
+}
+
+function markItemPaid(expenseId, fromId) {
+  const e = expenses.find(x => x.id === expenseId);
+  const d = e && expenseDebts(e).find(x => x.fromId === fromId);
+  if (!d) return;
+  writeRepayment(expenseId, d);
+}
+
+function undoItemPaid(expenseId, fromId) {
+  const t = transfers.find(x => x.expenseId === expenseId && x.fromId === fromId);
+  if (!t) return;
+  if (!confirm(`取消「${memberName(fromId)} 已還」？`)) return;
+  tripRef().collection('transfers').doc(t.id).delete().catch(onWriteError);
+}
+
+function renderItemDebts() {
+  const list = expenses.filter(e => expenseDebts(e).length)
+    .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
+  if (!list.length) return '';
+  let unpaid = 0;
+  const body = list.map(e => {
+    const paid = transfers.filter(t => t.expenseId === e.id);
+    const rows = expenseDebts(e).map(d => {
+      const done = paid.some(t => t.fromId === d.fromId);
+      if (!done) unpaid++;
+      return `<div class="item-debt ${done ? 'paid' : ''}">
+        <span class="txt">${escapeHTML(memberName(d.fromId))} 應還 ${escapeHTML(memberName(d.toId))} ${formatAmount(d.amount, d.currency)}</span>
+        ${done
+          ? `<button class="undo-btn" onclick="undoItemPaid('${e.id}','${d.fromId}')">✓ 已還</button>`
+          : `<button class="done-btn" onclick="markItemPaid('${e.id}','${d.fromId}')">已還</button>`}
+      </div>`;
+    }).join('');
+    const [, m, dd] = e.date.split('-');
+    return `<div class="item-exp">
+      <div class="head"><span>${escapeHTML(e.title)}</span><small>${Number(m)}/${Number(dd)}・${formatAmount(e.amount, e.currency)}</small></div>
+      ${rows}</div>`;
+  }).join('');
+  return `<div class="card"><details class="items" ${itemsOpen ? 'open' : ''} ontoggle="itemsOpen = this.open">
+    <summary><h2>逐筆明細</h2><span class="hint" style="margin:0">${unpaid ? `${unpaid} 項未還` : '全部已還'} <span class="arrow">▶</span></span></summary>
+    <p class="hint">一筆一筆確認誰還了。按「已還」後，上方「要怎麼還」會自動扣掉。</p>
+    ${body}
+  </details></div>`;
 }
 
 /* ---------- 啟動（永遠放在 script 最後面，所有變數和函式都定義好之後才執行） ---------- */

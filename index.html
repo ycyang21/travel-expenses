@@ -246,14 +246,15 @@
   details.items > summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
   details.items > summary::-webkit-details-marker { display: none; }
   details.items > summary h2 { margin: 0; }
-  details.items > summary .arrow { color: var(--muted); transition: transform .2s; }
+  details.items > summary .arrow { display: inline-block; color: var(--muted); transition: transform .2s; }
   details.items[open] > summary .arrow { transform: rotate(90deg); }
   .item-exp { border-top: 1px solid var(--line); padding: 12px 0 4px; margin-top: 12px; }
   .item-exp .head { display: flex; justify-content: space-between; font-weight: 600; }
   .item-exp .head small { font-weight: 400; color: var(--muted); }
   .item-debt { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
   .item-debt .txt { flex: 1; }
-  .item-debt.paid .txt { color: var(--muted); text-decoration: line-through; }
+  .item-debt .txt .detail { font-size: 13px; color: var(--muted); }
+  .item-debt.paid .txt .line { color: var(--muted); text-decoration: line-through; }
   .item-debt .done-btn, .item-debt .undo-btn { padding: 6px 12px; border-radius: 8px; background: #fff; white-space: nowrap; font-size: 14px; }
   .item-debt .done-btn { border: 1px solid var(--plus); color: var(--plus); }
   .item-debt .undo-btn { border: 1px solid var(--line); color: var(--muted); }
@@ -268,16 +269,39 @@
     padding: 18px 16px calc(env(safe-area-inset-bottom, 0px) + 16px);
     box-shadow: 0 -4px 20px rgba(27, 42, 65, .15);
   }
+  .sheet-panel { max-height: 90vh; overflow-y: auto; }
   .sheet-panel h2 { margin-bottom: 4px; }
+  .block-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .block-head h2 { margin: 0; }
+  .block-head span { color: var(--muted); font-size: 14px; }
+  .block-head b { color: var(--ink); font-size: 17px; }
+  h3.sub { font-size: 15px; margin: 0; color: var(--ink); }
+  details.items { margin-top: 14px; }
   .sheet-panel .big { font-size: 18px; margin: 6px 0 4px; }
   .sheet-panel .row2 { display: flex; gap: 10px; margin-top: 16px; }
   .sheet-panel .row2 .btn { margin-top: 0; }
   .method-link { border: 0; background: none; padding: 2px 0; color: var(--stamp); font-size: 14px; text-align: left; }
+
+  /* ===== 回首頁按鈕、統計頁 ===== */
+  .back-btn {
+    display: none; margin: 0 0 6px -4px; padding: 4px 10px 4px 4px; border: 0; border-radius: 999px;
+    background: rgba(255, 255, 255, .12); color: #fff; font-size: 14px;
+  }
+  .back-btn.show { display: inline-block; }
+  .stat-row { display: grid; grid-template-columns: 5.5em 1fr auto; align-items: center; gap: 8px; padding: 6px 0; font-size: 15px; }
+  .stat-row .bar { height: 10px; border-radius: 5px; background: #E8EEF6; overflow: hidden; }
+  .stat-row .bar span { display: block; height: 100%; border-radius: 5px; background: var(--stamp); }
+  .stat-row .val { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .stat-row .val small { color: var(--muted); margin-left: 4px; }
+  .form-top { display: flex; justify-content: space-between; align-items: center; }
+  .form-top h2 { margin: 0; }
+  .form-top button { border: 0; background: none; color: var(--muted); font-size: 15px; padding: 4px 0 4px 12px; }
 </style>
 </head>
 <body>
 
 <header class="ticket">
+  <button class="back-btn" id="back-btn" onclick="goHome()">‹ 回首頁</button>
   <h1 id="trip-title">旅途分帳</h1>
   <p id="trip-sub">建立一趟旅程開始記帳</p>
 </header>
@@ -296,7 +320,7 @@
       <h2>建立新旅程</h2>
       <label for="setup-name">旅程名稱</label>
       <input id="setup-name" placeholder="例如：紐約波士頓 2027">
-      <label for="setup-currency">結算幣別（大家最後用什麼錢還）</label>
+      <label for="setup-currency">主要貨幣（新增支出時預設的幣別）</label>
       <select id="setup-currency">
         <option value="TWD">新台幣 TWD</option>
         <option value="USD">美元 USD</option>
@@ -337,7 +361,7 @@
   <!-- 頁面 2：新增／編輯支出 -->
   <section class="page" id="page-add">
     <div class="card">
-      <h2 id="form-title">新增支出</h2>
+      <div class="form-top"><h2 id="form-title">新增支出</h2><button onclick="goHome()">取消</button></div>
 
       <label for="f-amount">金額</label>
       <div class="amount-row">
@@ -348,25 +372,6 @@
         <select id="f-currency" onchange="onCurrencyChange()"></select>
       </div>
 
-      <!-- 幣別跟結算幣別不同時才顯示匯率 -->
-      <div id="rate-box">
-        <label>換算成結算幣別</label>
-        <div class="seg" style="margin-top:0">
-          <button id="rm-now" onclick="setRateMode('now')">現在換算</button>
-          <button id="rm-later" onclick="setRateMode('later')">之後再算</button>
-        </div>
-        <div class="hint" id="rate-later-hint">先只記外幣金額。旅程結束後，到「結算」頁一次設定匯率換算。</div>
-        <div id="rate-now-box">
-        <label for="f-rate" id="rate-label">匯率</label>
-        <div class="rate-row">
-          <input id="f-rate" inputmode="decimal" placeholder="例如 32.5" oninput="draft.rateManual = true; setRateSource(''); updateForm()">
-          <button class="rate-fetch" id="rate-fetch-btn" onclick="fetchRateForForm()">🔄 抓匯率</button>
-        </div>
-        <div class="hint" id="rate-source"></div>
-        <div class="hint" id="rate-preview"></div>
-        </div>
-      </div>
-
       <label for="f-title">項目</label>
       <input id="f-title" placeholder="例如：Katz's 午餐">
 
@@ -374,7 +379,7 @@
       <div class="pick-list" id="f-category"></div>
 
       <label for="f-date">日期</label>
-      <input id="f-date" type="date" onchange="autoFetchRate()">
+      <input id="f-date" type="date">
 
       <label>怎麼付</label>
       <div class="seg" style="margin-top:0">
@@ -422,6 +427,11 @@
   </section>
 
   <!-- 頁面 3：結算（第三步會完成） -->
+  <!-- 統計 -->
+  <section class="page" id="page-stats">
+    <div id="stats-box"></div>
+  </section>
+
   <section class="page" id="page-settle">
     <div id="settle-box"></div>
   </section>
@@ -453,6 +463,7 @@
 
 <nav class="tabs" id="tabs">
   <button data-page="page-list" onclick="showPage('page-list')"><span>🧾</span>支出</button>
+  <button data-page="page-stats" onclick="showPage('page-stats')"><span>📊</span>統計</button>
   <button data-page="page-add" class="add" onclick="openAddForm()"><span>＋</span>新增</button>
   <button data-page="page-settle" onclick="showPage('page-settle')"><span>⚖️</span>結算</button>
   <button data-page="page-settings" onclick="showPage('page-settings')"><span>⚙️</span>設定</button>
@@ -467,6 +478,20 @@
     <label>還款方式（可不選）</label>
     <div class="pick-list" id="repay-methods"></div>
     <input id="repay-other" placeholder="例如：LINE Pay、美金現金" style="display:none;margin-top:8px">
+    <div id="repay-cur-box">
+      <label>用什麼貨幣還</label>
+      <div class="pick-list" id="repay-currencies"></div>
+      <div id="repay-rate-box">
+        <label for="repay-rate" id="repay-rate-label">匯率</label>
+        <div class="rate-row">
+          <input id="repay-rate" inputmode="decimal" placeholder="例如 32.5" oninput="onRepayRateInput(); document.getElementById('repay-rate-src').textContent = ''">
+          <button class="rate-fetch" onclick="fetchRepayRate()">🔄 抓匯率</button>
+        </div>
+        <div class="hint" id="repay-rate-src"></div>
+        <label for="repay-paid" id="repay-paid-label">實付金額</label>
+        <input id="repay-paid" inputmode="decimal" placeholder="0" oninput="onRepayPaidInput()">
+      </div>
+    </div>
     <div class="row2">
       <button class="btn ghost" onclick="closeRepaySheet()">取消</button>
       <button class="btn" id="repay-ok" onclick="confirmRepaySheet()">確定</button>
@@ -551,7 +576,6 @@ db.enablePersistence({ synchronizeTabs: true }).catch(e => console.warn('離線�
 
 const CURRENT_TRIP_KEY = 'travelSplit_currentTrip';   // 這支手機上次打開的旅程
 const LAST_CURRENCY_KEY = 'travelSplit_lastCurrency';
-const RATE_MODE_KEY = 'travelSplit_rateMode';
 const METHOD_KEY = 'travelSplit_payMethod';            // 這支手機上次用的付款方式
 const METHOD_OTHER_KEY = 'travelSplit_payMethodOther'; // 上次「其他」填的文字
 const PAY_METHODS = [
@@ -597,12 +621,62 @@ function myMember() {
 }
 
 /* ---------- 換頁 ---------- */
-function showPage(id) {
+function showPage(id, opts = {}) {
+  const prev = currentPage();
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === id));
   document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('active', b.dataset.page === id));
   if (id === 'page-settle') renderSettle();
+  if (id === 'page-stats') renderStats();
+  // 首頁以外的頁面都顯示「回首頁」
+  const home = isHomePage(id);
+  document.getElementById('back-btn').classList.toggle('show', !home);
+  // 讓手機的「上一頁」可以回首頁：離開首頁時記一筆瀏覽紀錄
+  if (!opts.fromHistory && id !== prev && !home) {
+    if (prev && !isHomePage(prev)) history.replaceState({ page: id }, '');
+    else history.pushState({ page: id }, '');
+  }
   window.scrollTo(0, 0);
 }
+
+function currentPage() {
+  const el = document.querySelector('.page.active');
+  return el ? el.id : null;
+}
+// 首頁：打開旅程時是支出列表；沒有打開旅程時是旅程列表
+function isHomePage(id) {
+  if (id === 'page-list') return true;
+  if (id === 'page-setup') return !prevTripId;   // 從旅程裡點「切換旅程」進來的，不算首頁
+  return false;
+}
+
+// 回首頁（左上角按鈕、新增頁的取消、手機的上一頁都會呼叫）
+function goHome(opts = {}) {
+  const page = currentPage();
+  if (page === 'page-add' && formHasInput() && !confirm('這筆支出還沒儲存，確定離開？')) {
+    if (opts.fromHistory) history.pushState({ page }, '');   // 取消離開：把紀錄補回去
+    return;
+  }
+  if (trip) showPage('page-list', opts);
+  else if (prevTripId) { const id = prevTripId; prevTripId = null; openTrip(id); }
+  else showTripPicker();
+}
+
+function formHasInput() {
+  return !!(document.getElementById('f-amount').value || document.getElementById('f-title').value ||
+            document.getElementById('f-note').value || (draft && draft.photos && draft.photos.some(p => p.isNew)));
+}
+
+// 手機的上一頁：有面板開著就先關面板，否則回首頁
+window.addEventListener('popstate', () => {
+  const overlays = ['calc', 'repay-sheet', 'photo-viewer'].map(id => document.getElementById(id)).filter(el => el.classList.contains('show'));
+  if (overlays.length) {
+    overlays.forEach(el => el.classList.remove('show'));
+    calc = null; repaySheet = null;
+    history.pushState({ page: currentPage() }, '');
+    return;
+  }
+  if (!isHomePage(currentPage())) goHome({ fromHistory: true });
+});
 function setHeader(title, sub) {
   document.getElementById('trip-title').textContent = title;
   document.getElementById('trip-sub').textContent = sub + (navigator.onLine ? '' : '・離線中，連線後會自動同步');
@@ -645,12 +719,15 @@ async function routeAfterLogin() {
 }
 
 /* ---------- 旅程列表（沒有打開任何旅程時） ---------- */
+let prevTripId = null;   // 從旅程裡點「切換旅程」時，記住原本的旅程，才能按「回首頁」回去
+
 async function showTripPicker() {
   stopListening();
   tripId = null; trip = null; expenses = []; transfers = []; rawExpenses = []; rawTransfers = [];
-  localStorage.removeItem(CURRENT_TRIP_KEY);
+  // 只是來看看旅程列表的話，重新整理後還是回到原本的旅程
+  if (!prevTripId) localStorage.removeItem(CURRENT_TRIP_KEY);
   document.getElementById('tabs').classList.remove('show');
-  setHeader('旅途分帳', '選擇或建立一趟旅程');
+  setHeader('旅途分帳', prevTripId ? '切換或建立旅程' : '選擇或建立一趟旅程');
   renderSetupMembers();
   showPage('page-setup');
   try {
@@ -666,7 +743,7 @@ async function showTripPicker() {
     console.error(e);
   }
 }
-function switchTrip() { showTripPicker(); }
+function switchTrip() { prevTripId = tripId; showTripPicker(); }
 
 /* ---------- 建立旅程 ---------- */
 function addSetupMember() {
@@ -716,6 +793,7 @@ function stopListening() {
   unsubscribers = [];
 }
 function openTrip(id) {
+  prevTripId = null;
   stopListening();
   tripId = id;
   trip = null; expenses = []; transfers = []; rawExpenses = []; rawTransfers = [];
@@ -824,7 +902,7 @@ async function deleteTrip() {
   transfers.forEach(t => batch.delete(tripRef().collection('transfers').doc(t.id)));
   expenses.forEach(e => (e.photoIds || []).forEach(pid => batch.delete(tripRef().collection('photos').doc(pid))));
   batch.delete(tripRef());
-  const id = tripId;
+  prevTripId = null;
   showTripPicker();
   batch.commit().catch(onWriteError);
 }
@@ -835,7 +913,7 @@ function render() {
   expenses = rawExpenses.map(normalizeExpense);
   transfers = rawTransfers.map(normalizeTransfer);
   const me = myMember();
-  setHeader(trip.name, `${trip.members.length} 人同行，以 ${trip.baseCurrency} 結算` + (me ? `・我是 ${me.name}` : ''));
+  setHeader(trip.name, `${trip.members.length} 人同行` + (me ? `・我是 ${me.name}` : ''));
 
   document.getElementById('settings-members').innerHTML = trip.members.map(m =>
     `<span class="chip ${m.uid === myUid ? 'me' : m.uid ? '' : 'pending'}">${escapeHTML(m.name)}${m.uid === myUid ? '（我）' : ''}</span>`
@@ -848,6 +926,7 @@ function render() {
   const current = document.querySelector('.page.active');
   if (!current || current.id === 'page-setup' || current.id === 'page-join') showPage('page-list');
   else if (current.id === 'page-settle') renderSettle();
+  else if (current.id === 'page-stats') renderStats();
 }
 
 // 網路斷線／恢復時更新頁首
@@ -863,11 +942,10 @@ window.addEventListener('offline', () => trip && render());
    {
      id, title, category, date: '2027-02-10',
      currency: 'USD', amount: 9000,          ← 原幣金額（最小單位）
-     rate: 32.5,                             ← 1 單位外幣 = 幾元結算幣
      payerId,                                ← 誰付的（各付各的時是 null）
      splitType: 'equal'（平均分攤）| 'custom'（自訂金額）| 'self'（各付各的，不產生欠款）,
      shares:     { 成員id: 原幣金額 },        ← 每人應分攤多少（原幣）
-     baseAmount, baseShares: { 成員id: 結算幣金額 }  ← 換算好的，第三步結算直接用
+     （外幣不在記帳時換算，還錢時才決定用什麼貨幣、什麼匯率還）
      createdAt, updatedAt
    }
    ========================================================= */
@@ -995,14 +1073,11 @@ function openAddForm() {
   document.getElementById('f-amount').value = '';
   document.getElementById('f-title').value = '';
   document.getElementById('f-date').value = todayStr();
-  document.getElementById('f-rate').value = (trip.rates || {})[lastCurrency] || '';
   document.getElementById('form-title').textContent = '新增支出';
   document.getElementById('f-note').value = '';
   draft.photos = [];            // [{ id, data, isNew }]
   draft.removedPhotoIds = [];   // 編輯時被刪掉的舊照片
   renderPhotos();
-  draft.rateManual = false;
-  draft.rateMode = localStorage.getItem(RATE_MODE_KEY) || 'now';
   draft.method = localStorage.getItem(METHOD_KEY) || null;
   draft.settledBefore = [];   // 編輯前，這筆支出已經還款的人
   draft.repayMethod = localStorage.getItem(REPAY_METHOD_KEY) || null;
@@ -1011,11 +1086,9 @@ function openAddForm() {
   document.getElementById('f-settled').checked = false;
   document.getElementById('f-settled-hint').textContent = '其他人已經把自己那份還給付款人，結算時不會再出現這筆欠款';
   document.getElementById('f-method-other').value = localStorage.getItem(METHOD_OTHER_KEY) || '';
-  setRateSource('');
   document.getElementById('save-btn').textContent = '儲存支出';
   document.getElementById('delete-btn').style.display = 'none';
   buildForm();
-  autoFetchRate();
   showPage('page-add');
 }
 
@@ -1038,14 +1111,11 @@ function openEditForm(id) {
   document.getElementById('f-amount').value = toText(e.amount);
   document.getElementById('f-title').value = e.title;
   document.getElementById('f-date').value = e.date;
-  document.getElementById('f-rate').value = e.currency === trip.baseCurrency ? '' : (e.rate ?? '');
   document.getElementById('form-title').textContent = '編輯支出';
   document.getElementById('f-note').value = e.note || '';
   draft.photos = [];
   draft.removedPhotoIds = [];
   loadPhotos(e);
-  draft.rateManual = true;
-  draft.rateMode = (e.currency !== trip.baseCurrency && e.rate == null) ? 'later' : 'now';
   draft.method = e.paymentMethod || null;
   const debtors = expenseDebts(e).map(d => d.fromId);
   const linked = transfers.filter(t => t.expenseId === e.id);
@@ -1059,7 +1129,6 @@ function openEditForm(id) {
     : '其他人已經把自己那份還給付款人，結算時不會再出現這筆欠款';
   renderFormRepay();
   document.getElementById('f-method-other').value = e.paymentMethodOther || '';
-  setRateSource('');
   document.getElementById('save-btn').textContent = '儲存修改';
   document.getElementById('delete-btn').style.display = 'block';
   buildForm();
@@ -1123,36 +1192,14 @@ function setSplitType(t) {
 
 function onCurrencyChange() {
   draft.currency = document.getElementById('f-currency').value;
-  // 自動帶入這個幣別上次用的匯率
-  document.getElementById('f-rate').value = (trip.rates || {})[draft.currency] || '';
-  draft.rateManual = false;
-  setRateSource('');
   updateForm();
-  autoFetchRate();
 }
 
-/* ---------- 即時更新：匯率預覽、分攤明細 ---------- */
+/* ---------- 即時更新：分攤明細 ---------- */
 function updateForm() {
   const cur = draft.currency;
   const base = trip.baseCurrency;
   const amount = parseAmount(document.getElementById('f-amount').value || '0', cur);
-
-  // 匯率區塊
-  const rateBox = document.getElementById('rate-box');
-  if (cur === base) {
-    rateBox.style.display = 'none';
-  } else {
-    rateBox.style.display = 'block';
-    const later = draft.rateMode === 'later';
-    document.getElementById('rm-now').classList.toggle('on', !later);
-    document.getElementById('rm-later').classList.toggle('on', later);
-    document.getElementById('rate-later-hint').style.display = later ? 'block' : 'none';
-    document.getElementById('rate-now-box').style.display = later ? 'none' : 'block';
-    document.getElementById('rate-label').textContent = `匯率（1 ${cur} ＝ 幾 ${base}）`;
-    const rate = parseFloat(document.getElementById('f-rate').value);
-    document.getElementById('rate-preview').textContent =
-      amount && rate > 0 ? `約 ${formatAmount(convertToBase(amount, cur, rate), base)}` : '';
-  }
 
   // 分攤明細
   const box = document.getElementById('split-detail');
@@ -1212,16 +1259,6 @@ function saveExpense() {
     CATEGORIES.find(c => c.id === draft.category).name;
   const date = document.getElementById('f-date').value || todayStr();
 
-  let rate = 1;
-  if (cur !== base) {
-    if (draft.rateMode === 'later') {
-      rate = null;
-    } else {
-      rate = parseFloat(document.getElementById('f-rate').value);
-      if (!(rate > 0)) { alert('請輸入匯率，或改選「之後再算」'); return; }
-    }
-  }
-
   const ids = draft.participants;
   if (ids.length === 0) { alert('請至少選一個分攤的人'); return; }
 
@@ -1237,16 +1274,6 @@ function saveExpense() {
   }
   const shares = {};
   ids.forEach((id, i) => { shares[id] = parts[i]; });
-
-  // 換算成結算幣：先換總額，再依比例分配，保證加總一致
-  // 之後再算：先不換算，baseAmount 和 baseShares 留空（null）
-  let baseAmount = null, baseShares = null;
-  if (rate !== null) {
-    baseAmount = convertToBase(amount, cur, rate);
-    const baseParts = allocate(baseAmount, parts);
-    baseShares = {};
-    ids.forEach((id, i) => { baseShares[id] = baseParts[i]; });
-  }
 
   if (draft.photosLoading || draft.photosBusy) { alert('照片還在處理，請稍等一下再儲存'); return; }
 
@@ -1264,12 +1291,13 @@ function saveExpense() {
     title, category: draft.category, date,
     note: document.getElementById('f-note').value.trim(),
     photoIds: draft.photos.map(p => p.id),
-    currency: cur, amount, rate,
+    currency: cur, amount,
+    rate: null, baseAmount: null, baseShares: null,   // 舊版的換算欄位，不再使用
     payerId: draft.splitType === 'self' ? null : draft.payerId,
     paymentMethod: draft.method,
     paymentMethodOther: draft.method === 'other' ? document.getElementById('f-method-other').value.trim() : '',
     splitType: draft.splitType,
-    shares, baseAmount, baseShares,
+    shares,
     v: 2,   // 資料格式版本：金額統一存到小數點後兩位
     updatedAt: now
   };
@@ -1288,14 +1316,10 @@ function saveExpense() {
     draft.repayMethod, repayOther);
   if (document.getElementById('f-settled').checked) rememberRepayMethod(draft.repayMethod, repayOther);
 
-  // 記住這次的幣別（只存在這支手機）和匯率（旅伴共用）
+  // 記住這次的幣別（只存在這支手機）
   localStorage.setItem(LAST_CURRENCY_KEY, cur);
-  if (cur !== base) localStorage.setItem(RATE_MODE_KEY, draft.rateMode);
   if (draft.method) localStorage.setItem(METHOD_KEY, draft.method); else localStorage.removeItem(METHOD_KEY);
   if (draft.method === 'other') localStorage.setItem(METHOD_OTHER_KEY, data.paymentMethodOther);
-  if (cur !== base && rate !== null && (trip.rates || {})[cur] !== rate) {
-    tripRef().update({ ['rates.' + cur]: rate }).catch(onWriteError);
-  }
   // 不用等雲端回應：有離線快取，畫面會立刻更新；沒網路時也不會卡住
   showPage('page-list');
 }
@@ -1312,20 +1336,12 @@ function deleteExpense() {
 }
 
 /* ---------- 支出列表 ---------- */
-function isConverted(e) { return e.baseAmount != null; }
-
-// 加總：已換算的算結算幣；還沒換算的外幣，各幣別分開加
+// 加總：各幣別分開加，例如「NT$12,340 ＋ US$450.00」
 function sumExpenses(list) {
-  const base = trip.baseCurrency;
-  let total = 0;
-  const foreign = {};
-  for (const e of list) {
-    if (isConverted(e)) total += e.baseAmount;
-    else foreign[e.currency] = (foreign[e.currency] || 0) + e.amount;
-  }
-  const parts = [formatAmount(total, base)];
-  for (const [c, v] of Object.entries(foreign)) parts.push(formatAmount(v, c));
-  return { total, foreign, text: parts.join(' ＋ ') };
+  const byCur = {};
+  for (const e of list) byCur[e.currency] = (byCur[e.currency] || 0) + e.amount;
+  const order = Object.keys(byCur).sort((x, y) => (y === trip.baseCurrency) - (x === trip.baseCurrency));
+  return { byCur, text: order.map(c => formatAmount(byCur[c], c)).join(' ＋ ') || formatAmount(0, trip.baseCurrency) };
 }
 
 function renderList() {
@@ -1343,24 +1359,18 @@ function renderList() {
   const groups = {};
   sorted.forEach(e => { (groups[e.date] = groups[e.date] || []).push(e); });
 
-  let html = `<div class="total-bar"><span>旅程總花費</span><strong>${formatAmount(sum.total, base)}</strong></div>`;
-  const foreignList = Object.entries(sum.foreign);
-  if (foreignList.length) {
-    html += `<div class="hint" style="text-align:right;margin:6px 4px 0">另有尚未換算：${foreignList.map(([c, v]) => formatAmount(v, c)).join('、')}</div>`;
-  }
+  let html = `<div class="total-bar"><span>旅程總花費</span><strong style="text-align:right">${sum.text}</strong></div>`;
   for (const [date, list] of Object.entries(groups)) {
     const [y, m, d] = date.split('-');
     html += `<div class="day-head"><span>${Number(m)}/${Number(d)}</span><span>${sumExpenses(list).text}</span></div>`;
     html += list.map(e => {
       const cat = CATEGORIES.find(c => c.id === e.category) || CATEGORIES[5];
       const n = Object.keys(e.shares).length;
-      let converted = '';
-      if (e.currency !== base) converted = isConverted(e) ? `<small>≈ ${formatAmount(e.baseAmount, base)}</small>` : '<small>尚未換算</small>';
       return `<button class="exp" onclick="openEditForm('${e.id}')">
         <span class="icon">${cat.icon}</span>
         <span class="mid"><div class="title">${escapeHTML(e.title)}</div>
           <div class="who">${e.splitType === 'self' ? `各付各的${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}・${n} 人` : `${escapeHTML(memberName(e.payerId))} 付款${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}・${n} 人分攤`}${isFullySettled(e) ? '・<span class="settled-tag">✓已結清</span>' : ''}${e.note ? '・📝' : ''}${(e.photoIds || []).length ? `・📷${e.photoIds.length}` : ''}</div></span>
-        <span class="money">${formatAmount(e.amount, e.currency)}${converted}</span>
+        <span class="money">${formatAmount(e.amount, e.currency)}</span>
       </button>`;
     }).join('');
   }
@@ -1368,84 +1378,96 @@ function renderList() {
 }
 
 /* =========================================================
-   第三步：結算
+   第三步：結算（依幣別分區）
    ---------------------------------------------------------
-   1. 每個人的淨額 = 他付出去的錢 − 他應該分攤的錢 ± 已經還的錢
-        正數：別人欠他　　負數：他欠別人
-      因為每筆支出的 baseShares 加總剛好等於 baseAmount，
-      所有人的淨額加起來一定是 0。
-   2. 最少轉帳：每次讓「欠最多的人」還給「被欠最多的人」，
-      能還多少就還多少，其中一方歸零後換下一個。
-      n 個人最多只需要 n−1 筆轉帳。
+   每種貨幣一個區塊，各自計算，不互相換算：
+     總花費 → 未還加總（兩人之間，可一次結清）→ 逐項（可個別按已還）
+   外幣欠款在還錢的時候，才決定用什麼貨幣、什麼匯率還。
+
+   還款紀錄（transfers）的格式：
+   { id, expenseId, fromId, toId, amount, currency,   ← 還的是哪筆支出、原幣金額
+     method, methodOther,                             ← 還款方式（可空）
+     paidCurrency, paidAmount, paidRate,              ← 實際用什麼貨幣還（空的 = 用原幣）
+     date, createdAt, createdBy, v: 2 }
    ========================================================= */
+const openSections = {};   // 收合區塊目前是開還是關（畫面更新時保持原狀）
 
-// 把支出分組：已換算的一組（結算幣），每個還沒換算的外幣各一組
-function settleGroups() {
-  const base = trip.baseCurrency;
-  const groups = [{ currency: base, converted: true, list: expenses.filter(isConverted) }];
-  const foreign = {};
-  expenses.filter(e => !isConverted(e)).forEach(e => { (foreign[e.currency] = foreign[e.currency] || []).push(e); });
-  for (const [c, list] of Object.entries(foreign)) groups.push({ currency: c, converted: false, list });
-  return groups;
+// 這趟旅程用到的貨幣，結算幣別排第一
+function tripCurrencies() {
+  const list = [];
+  [...expenses].sort((a, b) => a.date.localeCompare(b.date)).forEach(e => { if (!list.includes(e.currency)) list.push(e.currency); });
+  return list.sort((x, y) => (y === trip.baseCurrency) - (x === trip.baseCurrency));
 }
 
-// 算一組的每人淨額
-function computeBalances(group) {
-  const bal = {};
-  trip.members.forEach(m => { bal[m.id] = { paid: 0, owed: 0, net: 0 }; });
-  const ensure = id => (bal[id] = bal[id] || { paid: 0, owed: 0, net: 0 });
-  const amt = e => group.converted ? e.baseAmount : e.amount;
-  const shares = e => group.converted ? e.baseShares : e.shares;
+// 一筆支出裡，誰欠付款人多少（原幣）
+function expenseDebts(e) {
+  if (e.splitType === 'self' || !e.payerId) return [];
+  return Object.entries(e.shares)
+    .filter(([id, v]) => id !== e.payerId && v > 0)
+    .map(([id, v]) => ({ fromId: id, toId: e.payerId, amount: v, currency: e.currency }));
+}
+function repaymentOf(expenseId, fromId) {
+  return transfers.find(t => t.expenseId === expenseId && t.fromId === fromId);
+}
+function isFullySettled(e) {
+  const debts = expenseDebts(e);
+  return debts.length > 0 && debts.every(d => repaymentOf(e.id, d.fromId));
+}
 
-  for (const e of group.list) {
-    if (e.splitType === 'self') {
-      // 各付各的：每個人付了自己那份，也花了自己那份 → 不會產生欠款
-      for (const [id, v] of Object.entries(shares(e))) { ensure(id).paid += v; ensure(id).owed += v; }
-      continue;
+// 某個貨幣所有還沒還的項目
+function unpaidDebts(currency) {
+  const out = [];
+  for (const e of expenses) {
+    if (e.currency !== currency) continue;
+    for (const d of expenseDebts(e)) if (!repaymentOf(e.id, d.fromId)) out.push({ ...d, expenseId: e.id });
+  }
+  return out;
+}
+
+// 兩人之間的未還加總：A 欠 B 的和 B 欠 A 的互相抵銷
+function pairSummary(currency) {
+  const owe = {};
+  for (const d of unpaidDebts(currency)) {
+    const k = d.fromId + '|' + d.toId;
+    owe[k] = (owe[k] || 0) + d.amount;
+  }
+  const seen = new Set(), out = [];
+  for (const k of Object.keys(owe)) {
+    const [a, b] = k.split('|');
+    const pk = [a, b].sort().join('|');
+    if (seen.has(pk)) continue;
+    seen.add(pk);
+    const net = (owe[a + '|' + b] || 0) - (owe[b + '|' + a] || 0);
+    if (net >= 0) out.push({ fromId: a, toId: b, amount: net });
+    else out.push({ fromId: b, toId: a, amount: -net });
+  }
+  return out.sort((x, y) => y.amount - x.amount);
+}
+
+// 每個人在每種貨幣：付了多少、實際花了多少
+function spendingByPerson() {
+  const r = {};
+  const add = (id, c, field, v) => {
+    r[id] = r[id] || {};
+    r[id][c] = r[id][c] || { paid: 0, spent: 0 };
+    r[id][c][field] += v;
+  };
+  for (const e of expenses) {
+    for (const [id, v] of Object.entries(e.shares)) {
+      add(id, e.currency, 'spent', v);
+      if (e.splitType === 'self') add(id, e.currency, 'paid', v);
     }
-    ensure(e.payerId).paid += amt(e);
-    for (const [id, v] of Object.entries(shares(e))) ensure(id).owed += v;
+    if (e.splitType !== 'self' && e.payerId) add(e.payerId, e.currency, 'paid', e.amount);
   }
-  for (const id in bal) bal[id].net = bal[id].paid - bal[id].owed;
-
-  // 這個幣別已經還的錢：付錢的人淨額增加，收錢的人淨額減少
-  for (const t of transfers.filter(t => t.currency === group.currency)) {
-    ensure(t.fromId).net += t.amount;
-    ensure(t.toId).net -= t.amount;
-  }
-  return bal;
+  return r;
 }
 
-function computeTransfers(bal) {
-  const creditors = [];  // 別人欠他
-  const debtors = [];    // 他欠別人
-  for (const [id, b] of Object.entries(bal)) {
-    if (b.net > 0) creditors.push({ id, amt: b.net });
-    if (b.net < 0) debtors.push({ id, amt: -b.net });
-  }
-  creditors.sort((a, b) => b.amt - a.amt);
-  debtors.sort((a, b) => b.amt - a.amt);
-
-  const result = [];
-  let i = 0, j = 0;
-  while (i < debtors.length && j < creditors.length) {
-    const pay = Math.min(debtors[i].amt, creditors[j].amt);
-    result.push({ fromId: debtors[i].id, toId: creditors[j].id, amount: pay });
-    debtors[i].amt -= pay;
-    creditors[j].amt -= pay;
-    if (debtors[i].amt === 0) i++;
-    if (creditors[j].amt === 0) j++;
-  }
-  return result;
-}
-
-function transferRows(todo, currency) {
-  if (todo.length === 0) return '<div class="all-clear">✓ 大家都兩清了</div>';
-  return todo.map((t, i) => `<div class="transfer">
-    <div class="flow"><b>${escapeHTML(memberName(t.fromId))}</b> 給 <b>${escapeHTML(memberName(t.toId))}</b>
-      <span class="amt">${formatAmount(t.amount, currency)}</span></div>
-    <button class="done-btn" onclick="markPaid('${currency}', ${i})">已還</button>
-  </div>`).join('');
+// 收合區塊；defaultOpen = 第一次顯示時要不要展開
+function section(key, title, right, body, defaultOpen) {
+  const open = openSections[key] === undefined ? defaultOpen : openSections[key];
+  return `<details class="items" ${open ? 'open' : ''} ontoggle="openSections['${key}'] = this.open">
+    <summary><h3 class="sub">${title}</h3><span class="hint" style="margin:0">${right} <span class="arrow">▶</span></span></summary>
+    ${body}</details>`;
 }
 
 function renderSettle() {
@@ -1455,103 +1477,84 @@ function renderSettle() {
     box.innerHTML = '<div class="empty"><strong>還沒有支出可以結算</strong>先記幾筆帳再回來看</div>';
     return;
   }
-  const base = trip.baseCurrency;
-  const groups = settleGroups();
-  const main = groups[0];
-  const foreignGroups = groups.slice(1);
-  const mainBal = computeBalances(main);
-  let html = '';
-
-  // 1. 還沒換算的外幣：一次換算
-  if (foreignGroups.length) {
-    html += '<div class="card"><h2>尚未換算的外幣</h2>' +
-      '<p class="hint" style="margin-top:0">設定匯率後按「換算」，這些支出會一起換成 ' + base + '，併入下方的結算。</p>';
-    html += foreignGroups.map(g => {
-      const total = g.list.reduce((a, e) => a + e.amount, 0);
-      const c = g.currency;
-      return `<div style="margin-top:14px">
-        <div><b>${c}</b>：${g.list.length} 筆，共 ${formatAmount(total, c)}</div>
-        <label for="conv-${c}">匯率（1 ${c} ＝ 幾 ${base}）</label>
-        <div class="rate-row">
-          <input id="conv-${c}" inputmode="decimal" value="${(trip.rates || {})[c] || ''}" placeholder="例如 32.5" oninput="previewConvert('${c}')">
-          <button class="rate-fetch" onclick="fetchConvertRate('${c}')">🔄 最新匯率</button>
-        </div>
-        <div class="hint" id="conv-hint-${c}"></div>
-        <button class="btn" style="margin-top:10px" onclick="convertCurrency('${c}')">換算 ${c}</button>
-      </div>`;
-    }).join('');
-    html += '</div>';
-  }
-
-  // 2. 還需要的轉帳（結算幣）
-  if (main.list.length || transfers.some(t => t.currency === base)) {
-    html += `<div class="card"><h2>要怎麼還</h2>${transferRows(computeTransfers(mainBal), base)}</div>`;
-  }
-
-  // 2.5 逐筆明細（收合）
-  html += renderItemDebts();
-
-  // 3. 還沒換算的外幣，也可以直接用外幣互相還
-  for (const g of foreignGroups) {
-    html += `<div class="card"><h2>要怎麼還（${g.currency}，尚未換算）</h2>` +
-      '<p class="hint" style="margin-top:0">如果大家直接用外幣現金還，照這裡還就好，不必換算。</p>' +
-      transferRows(computeTransfers(computeBalances(g)), g.currency) + '</div>';
-  }
-
-  // 4. 每個人的收支
-  html += `<div class="card"><h2>每人明細（${base}）</h2>`;
-  html += trip.members.map(m => {
-    const b = mainBal[m.id];
-    const cls = b.net > 0 ? 'plus' : b.net < 0 ? 'minus' : 'zero';
-    const label = b.net > 0 ? '可收回' : b.net < 0 ? '還要付' : '已兩清';
-    const extra = foreignGroups.map(g => {
-      const owed = g.list.reduce((a, e) => a + (e.shares[m.id] || 0), 0);
-      return owed ? formatAmount(owed, g.currency) : '';
-    }).filter(Boolean);
-    return `<div class="bal">
-      <div><div class="name">${escapeHTML(m.name)}</div>
-        <div class="detail">付了 ${formatAmount(b.paid, base)}・實際花費 ${formatAmount(b.owed, base)}</div>
-        ${extra.length ? `<div class="detail">另有未換算花費 ${extra.join('、')}</div>` : ''}</div>
-      <div class="net ${cls}"><div class="detail">${label}</div>${formatAmount(Math.abs(b.net), base)}</div>
-    </div>`;
-  }).join('');
-  html += '</div>';
-
-  // 5. 已經還的紀錄
-  if (transfers.length) {
-    html += '<div class="card"><h2>已還款紀錄</h2>';
-    html += [...transfers].sort((a, b) => b.createdAt - a.createdAt).map(t => `<div class="transfer paid">
-      <div class="flow">${escapeHTML(memberName(t.fromId))} 給 ${escapeHTML(memberName(t.toId))}
-        <span class="amt">${formatAmount(t.amount, t.currency)}</span>
-        <span class="detail">${t.date}${t.expenseId ? `・${escapeHTML((expenses.find(e => e.id === t.expenseId) || {}).title || '')}` : ''}</span>
-        <button class="method-link" onclick="editRepayMethod('${t.id}')">${repayLabel(t) ? escapeHTML(repayLabel(t)) + ' ✎' : '＋ 還款方式'}</button></div>
-      <button class="undo-btn" onclick="undoPaid('${t.id}')">取消</button>
-    </div>`).join('');
-    html += '</div>';
-  }
-
+  let html = tripCurrencies().map(renderCurrencyBlock).join('');
+  if (transfers.length) html += `<div class="card" style="padding-top:2px">${section('history', '已還款紀錄', `${transfers.length} 筆`, renderHistory(), false)}</div>`;
   html += '<button class="btn ghost" onclick="shareSettle()">分享結算結果</button>';
   box.innerHTML = html;
-  foreignGroups.forEach(g => previewConvert(g.currency));
 }
 
-// 按「已還」：記一筆還款，結算會自動重算
-function markPaid(currency, i) {
-  const group = settleGroups().find(g => g.currency === currency && (g.converted === (currency === trip.baseCurrency)));
-  if (!group) return;
-  const t = computeTransfers(computeBalances(group))[i];
-  if (!t) return;
-  openRepaySheet({
-    title: '確認已還款',
-    desc: `${memberName(t.fromId)} 已經給 ${memberName(t.toId)} ${formatAmount(t.amount, currency)}`,
-    onConfirm: (method, methodOther) => {
-      const id = newId();
-      tripRef().collection('transfers').doc(id)
-        .set({ id, fromId: t.fromId, toId: t.toId, amount: t.amount, currency, date: todayStr(),
-               createdAt: Date.now(), createdBy: myUid, v: 2, method, methodOther })
-        .catch(onWriteError);
-    }
-  });
+function renderCurrencyBlock(c) {
+  const list = expenses.filter(e => e.currency === c);
+  const total = list.reduce((a, e) => a + e.amount, 0);
+  const pairs = pairSummary(c);
+
+  // 未還加總
+  const pairHtml = pairs.length ? pairs.map(p => `<div class="transfer">
+      <div class="flow">${p.amount
+        ? `<b>${escapeHTML(memberName(p.fromId))}</b> 還要給 <b>${escapeHTML(memberName(p.toId))}</b><span class="amt">${formatAmount(p.amount, c)}</span>`
+        : `<b>${escapeHTML(memberName(p.fromId))}</b> 和 <b>${escapeHTML(memberName(p.toId))}</b> 互相抵銷<span class="detail">金額剛好一樣，標記後就兩清</span>`}</div>
+      <button class="done-btn" onclick="settlePair('${c}','${p.fromId}','${p.toId}')">一次結清</button>
+    </div>`).join('') : '<div class="all-clear">✓ 都還清了</div>';
+
+  // 逐項
+  const withDebts = list.filter(e => expenseDebts(e).length)
+    .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
+  let unpaidCount = 0;
+  const itemsHtml = withDebts.length ? withDebts.map(e => {
+    const rows = expenseDebts(e).map(d => {
+      const t = repaymentOf(e.id, d.fromId);
+      if (!t) unpaidCount++;
+      const label = t ? repayLabel(t) : '';
+      const editBtn = t && t.method !== 'offset'
+        ? `<br><button class="method-link" onclick="editRepayMethod('${t.id}')">${label ? escapeHTML(label) + ' ✎' : '＋ 還款方式'}</button>`
+        : (t ? `<br><span class="detail">${escapeHTML(label)}</span>` : '');
+      return `<div class="item-debt ${t ? 'paid' : ''}">
+        <span class="txt"><span class="line">${escapeHTML(memberName(d.fromId))} 應還 ${escapeHTML(memberName(d.toId))} ${formatAmount(d.amount, c)}</span>${editBtn}</span>
+        ${t
+          ? `<button class="undo-btn" onclick="undoItemPaid('${e.id}','${d.fromId}')">✓ 已還</button>`
+          : `<button class="done-btn" onclick="markItemPaid('${e.id}','${d.fromId}')">已還</button>`}
+      </div>`;
+    }).join('');
+    const [, m, dd] = e.date.split('-');
+    return `<div class="item-exp">
+      <div class="head"><span>${escapeHTML(e.title)}</span><small>${Number(m)}/${Number(dd)}・${formatAmount(e.amount, c)}</small></div>
+      ${rows}</div>`;
+  }).join('') : '<p class="hint">這個貨幣沒有需要還的項目（都是各付各的）</p>';
+
+  return `<div class="card">
+    <div class="block-head"><h2>${CURRENCIES[c].name} ${c}</h2><span>總花費 <b>${formatAmount(total, c)}</b></span></div>
+    <h3 class="sub" style="margin-top:16px">未還加總</h3>
+    ${pairHtml}
+    ${section('items-' + c, '逐項', unpaidCount ? `${unpaidCount} 項未還` : '全部已還', itemsHtml, true)}
+  </div>`;
+}
+
+function renderSpending() {
+  const sp = spendingByPerson();
+  const curs = tripCurrencies();
+  return trip.members.map(m => {
+    const mine = sp[m.id] || {};
+    const paid = curs.filter(c => mine[c] && mine[c].paid).map(c => formatAmount(mine[c].paid, c)).join(' ＋ ') || '0';
+    const spent = curs.filter(c => mine[c] && mine[c].spent).map(c => formatAmount(mine[c].spent, c)).join(' ＋ ') || '0';
+    return `<div class="bal"><div><div class="name">${escapeHTML(m.name)}</div>
+      <div class="detail">付了 ${paid}</div><div class="detail">實際花費 ${spent}</div></div></div>`;
+  }).join('');
+}
+
+function renderHistory() {
+  return [...transfers].sort((a, b) => b.createdAt - a.createdAt).map(t => {
+    const exp = expenses.find(e => e.id === t.expenseId);
+    const label = repayLabel(t);
+    const editable = t.expenseId && t.method !== 'offset';
+    return `<div class="transfer paid">
+      <div class="flow">${escapeHTML(memberName(t.fromId))} 給 ${escapeHTML(memberName(t.toId))}
+        <span class="amt">${formatAmount(t.amount, t.currency)}</span>
+        <span class="detail">${t.date}${exp ? `・${escapeHTML(exp.title)}` : (t.expenseId ? '' : '・舊版紀錄（不計入結算）')}</span>
+        ${editable ? `<button class="method-link" onclick="editRepayMethod('${t.id}')">${label ? escapeHTML(label) + ' ✎' : '＋ 還款方式'}</button>`
+                   : (label ? `<span class="detail">${escapeHTML(label)}</span>` : '')}</div>
+      <button class="undo-btn" onclick="undoPaid('${t.id}')">取消</button>
+    </div>`;
+  }).join('');
 }
 
 function undoPaid(id) {
@@ -1559,78 +1562,23 @@ function undoPaid(id) {
   tripRef().collection('transfers').doc(id).delete().catch(onWriteError);
 }
 
-/* ---------- 一次換算某個外幣 ---------- */
-function previewConvert(c) {
-  const el = document.getElementById('conv-hint-' + c);
-  if (!el) return;
-  const rate = parseFloat(document.getElementById('conv-' + c).value);
-  const total = expenses.filter(e => !isConverted(e) && e.currency === c).reduce((a, e) => a + e.amount, 0);
-  el.textContent = rate > 0 ? `換算後約 ${formatAmount(convertToBase(total, c, rate), trip.baseCurrency)}` : '';
-}
-
-async function fetchConvertRate(c) {
-  const el = document.getElementById('conv-hint-' + c);
-  el.textContent = '正在抓匯率…';
-  try {
-    const { rate, date } = await getRate(c, trip.baseCurrency, todayStr());
-    document.getElementById('conv-' + c).value = rate;
-    previewConvert(c);
-    const [, m, d] = date.split('-');
-    el.textContent += `（${Number(m)}/${Number(d)} 國際市場匯率）`;
-  } catch (e) {
-    el.textContent = '抓不到匯率，請手動輸入';
-  }
-}
-
-function convertCurrency(c) {
-  const base = trip.baseCurrency;
-  const rate = parseFloat(document.getElementById('conv-' + c).value);
-  if (!(rate > 0)) { alert('請輸入匯率'); return; }
-  const list = expenses.filter(e => !isConverted(e) && e.currency === c);
-  const paidList = transfers.filter(t => t.currency === c);
-  if (!confirm(`把 ${list.length} 筆 ${c} 支出，用 1 ${c} = ${rate} ${base} 換算？\n換算後可以到各筆支出個別修改。`)) return;
-
-  // 一次寫入（batch）：全部成功或全部失敗，不會只換一半
-  const batch = db.batch();
-  const newBaseShares = {};   // 支出 id → 換算後每人金額
-  for (const e of list) {
-    const baseAmount = convertToBase(e.amount, c, rate);
-    const ids = Object.keys(e.shares);
-    const parts = allocate(baseAmount, ids.map(id => e.shares[id]));
-    const baseShares = {};
-    ids.forEach((id, i) => { baseShares[id] = parts[i]; });
-    newBaseShares[e.id] = baseShares;
-    // 舊格式的支出順便存成新格式（amount、shares 用換算過的新值）
-    batch.update(tripRef().collection('expenses').doc(e.id),
-      { rate, baseAmount, baseShares, amount: e.amount, shares: e.shares, v: 2, updatedAt: Date.now() });
-  }
-  // 已經用外幣還過的錢，也一起換成結算幣
-  for (const t of paidList) {
-    const linked = t.expenseId && newBaseShares[t.expenseId];
-    const amount = linked ? (linked[t.fromId] || 0) : convertToBase(t.amount, c, rate);
-    batch.update(tripRef().collection('transfers').doc(t.id), { amount, currency: base, v: 2 });
-  }
-  batch.update(tripRef(), { ['rates.' + c]: rate });
-  batch.commit().catch(onWriteError);
-}
-
 // 產生一段文字，可以直接貼到 LINE 群組
 async function shareSettle() {
-  const base = trip.baseCurrency;
-  const groups = settleGroups();
-  const mainBal = computeBalances(groups[0]);
+  const curs = tripCurrencies();
   let text = `【${trip.name}】結算\n總花費 ${sumExpenses(expenses).text}\n`;
-  for (const g of groups) {
-    if (!g.converted) text += `\n${g.currency}（尚未換算）：\n`;
-    else if (!g.list.length) continue;
-    else text += '\n';
-    const todo = computeTransfers(computeBalances(g));
-    text += todo.length
-      ? todo.map(t => `${memberName(t.fromId)} → ${memberName(t.toId)}：${formatAmount(t.amount, g.currency)}`).join('\n')
-      : '大家都兩清了！';
+  for (const c of curs) {
+    const pairs = pairSummary(c).filter(p => p.amount > 0);
+    text += `\n〔${CURRENCIES[c].name} ${c}〕\n`;
+    text += pairs.length
+      ? pairs.map(p => `${memberName(p.fromId)} → ${memberName(p.toId)}：${formatAmount(p.amount, c)}`).join('\n')
+      : '都還清了！';
     text += '\n';
   }
-  text += `\n每人實際花費（${base}）：\n` + trip.members.map(m => `${m.name} ${formatAmount(mainBal[m.id].owed, base)}`).join('\n');
+  const sp = spendingByPerson();
+  text += '\n每人實際花費：\n' + trip.members.map(m => {
+    const mine = sp[m.id] || {};
+    return `${m.name} ` + (curs.filter(c => mine[c] && mine[c].spent).map(c => formatAmount(mine[c].spent, c)).join(' ＋ ') || '0');
+  }).join('\n');
 
   try {
     if (navigator.share) {           // 手機：跳出分享選單（可選 LINE）
@@ -1915,10 +1863,10 @@ function closeViewer() {
      → { "date": "2027-02-10", "usd": { "twd": 32.45, "jpy": 150.2, ... } }
    主要網址失敗時改用備援網址（官方建議一定要做）。
    這是國際市場中間價，不是台灣銀行的牌告匯率。
+   現在只用在「已還」面板：外幣欠款改用其他貨幣還時，幫忙帶入參考匯率。
    ========================================================= */
 const RATE_EARLIEST = '2024-03-02';   // 這個來源最早的資料日期
 const rateCache = {};                 // 同一天同幣別只抓一次
-let rateRequestNo = 0;                // 連續切換時，只採用最後一次的結果
 
 async function fetchJSON(url) {
   const res = await fetch(url);
@@ -1955,51 +1903,6 @@ async function requestRate(from, to, date) {
     } catch (e) { lastErr = e; }
   }
   throw lastErr;
-}
-
-function setRateMode(m) {
-  draft.rateMode = m;
-  updateForm();
-  if (m === 'now' && !document.getElementById('f-rate').value) { draft.rateManual = false; autoFetchRate(); }
-}
-
-function setRateSource(text) {
-  document.getElementById('rate-source').textContent = text;
-}
-
-// 表單上的「抓匯率」按鈕
-async function fetchRateForForm() {
-  if (!draft) return;
-  const cur = draft.currency, base = trip.baseCurrency;
-  if (cur === base) return;
-  const date = document.getElementById('f-date').value || todayStr();
-  if (date < RATE_EARLIEST) { setRateSource('這個日期太早，沒有匯率資料，請手動輸入'); return; }
-  if (!navigator.onLine) { setRateSource('目前離線，先用上次的匯率，或手動輸入'); return; }
-
-  const myNo = ++rateRequestNo;
-  const btn = document.getElementById('rate-fetch-btn');
-  btn.disabled = true;
-  setRateSource('正在抓匯率…');
-  try {
-    const { rate, date: gotDate } = await getRate(cur, base, date);
-    if (myNo !== rateRequestNo || !draft || draft.currency !== cur) return;   // 使用者已經換了幣別或日期
-    document.getElementById('f-rate').value = rate;
-    draft.rateManual = false;
-    const [, m, d] = gotDate.split('-');
-    setRateSource(`${Number(m)}/${Number(d)} 國際市場匯率` + (gotDate !== date ? '（所選日期還沒有資料，用最新的）' : ''));
-    updateForm();
-  } catch (e) {
-    console.error(e);
-    if (myNo === rateRequestNo) setRateSource('抓不到匯率，請手動輸入');
-  } finally {
-    if (myNo === rateRequestNo) btn.disabled = false;
-  }
-}
-
-// 換幣別、換日期、開新表單時自動抓；但使用者自己改過的匯率不會被蓋掉
-function autoFetchRate() {
-  if (!draft || draft.rateManual || draft.rateMode === 'later') return;
-  fetchRateForForm();
 }
 
 
@@ -2111,107 +2014,9 @@ async function switchToExistingAccount(cred) {
 async function logout() {
   if (!confirm('確定登出？登出後這台裝置會變回訪客，要再用 Google 登入才看得到你的旅程。')) return;
   stopListening();
+  prevTripId = null;
   localStorage.removeItem(CURRENT_TRIP_KEY);
   await auth.signOut();   // onAuthStateChanged 會自動再以訪客身分登入，並回到旅程列表
-}
-
-
-/* =========================================================
-   逐筆還款
-   ---------------------------------------------------------
-   還款紀錄（transfers）多一個欄位 expenseId，代表「還的是哪一筆支出」。
-   結算的算法不用改：它本來就會把所有還款紀錄算進去，
-   所以逐筆還的錢，會自動從「要怎麼還」裡扣掉。
-   ========================================================= */
-let itemsOpen = false;   // 逐筆明細是否展開（重新整理畫面時保持原狀）
-
-// 一筆支出裡，誰欠付款人多少（用結算時的幣別：已換算用結算幣，未換算用外幣）
-function expenseDebts(e) {
-  if (e.splitType === 'self' || !e.payerId) return [];
-  const conv = isConverted(e);
-  const shares = conv ? e.baseShares : e.shares;
-  const currency = conv ? trip.baseCurrency : e.currency;
-  return Object.entries(shares)
-    .filter(([id, v]) => id !== e.payerId && v > 0)
-    .map(([id, v]) => ({ fromId: id, toId: e.payerId, amount: v, currency }));
-}
-
-function isFullySettled(e) {
-  const debts = expenseDebts(e);
-  if (!debts.length) return false;
-  const paid = transfers.filter(t => t.expenseId === e.id).map(t => t.fromId);
-  return debts.every(d => paid.includes(d.fromId));
-}
-
-function writeRepayment(expenseId, d, method = null, methodOther = '') {
-  const id = newId();
-  tripRef().collection('transfers').doc(id).set({
-    id, expenseId, fromId: d.fromId, toId: d.toId, amount: d.amount, currency: d.currency,
-    date: todayStr(), createdAt: Date.now(), createdBy: myUid, v: 2, method, methodOther
-  }).catch(onWriteError);
-}
-
-// 儲存支出後呼叫：金額、付款人可能改了，所以先刪掉舊的，再依最新金額重建
-function syncExpenseRepayments(e, allChecked, paidBefore, method, methodOther) {
-  const debts = expenseDebts(e);
-  const old = transfers.filter(t => t.expenseId === e.id);
-  let keep;
-  if (allChecked) keep = debts.map(d => d.fromId);                     // 勾選：全部都還了
-  else if (debts.length && debts.every(d => paidBefore.includes(d.fromId))) keep = [];   // 原本全還，現在取消勾選
-  else keep = paidBefore;                                               // 沒動：保留原本部分還款的人
-  old.forEach(t => tripRef().collection('transfers').doc(t.id).delete().catch(onWriteError));
-  debts.filter(d => keep.includes(d.fromId)).forEach(d => {
-    if (allChecked) { writeRepayment(e.id, d, method, methodOther); return; }   // 勾選時：用表單選的還款方式
-    const prev = old.find(t => t.fromId === d.fromId) || {};                  // 部分還款：保留各自原本的方式
-    writeRepayment(e.id, d, prev.method || null, prev.methodOther || '');
-  });
-}
-
-function markItemPaid(expenseId, fromId) {
-  const e = expenses.find(x => x.id === expenseId);
-  const d = e && expenseDebts(e).find(x => x.fromId === fromId);
-  if (!d) return;
-  openRepaySheet({
-    title: '確認已還款',
-    desc: `${memberName(d.fromId)} 已經給 ${memberName(d.toId)} ${formatAmount(d.amount, d.currency)}（${e.title}）`,
-    onConfirm: (method, methodOther) => writeRepayment(expenseId, d, method, methodOther)
-  });
-}
-
-function undoItemPaid(expenseId, fromId) {
-  const t = transfers.find(x => x.expenseId === expenseId && x.fromId === fromId);
-  if (!t) return;
-  if (!confirm(`取消「${memberName(fromId)} 已還」？`)) return;
-  tripRef().collection('transfers').doc(t.id).delete().catch(onWriteError);
-}
-
-function renderItemDebts() {
-  const list = expenses.filter(e => expenseDebts(e).length)
-    .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
-  if (!list.length) return '';
-  let unpaid = 0;
-  const body = list.map(e => {
-    const paid = transfers.filter(t => t.expenseId === e.id);
-    const rows = expenseDebts(e).map(d => {
-      const done = paid.some(t => t.fromId === d.fromId);
-      if (!done) unpaid++;
-      return `<div class="item-debt ${done ? 'paid' : ''}">
-        <span class="txt">${escapeHTML(memberName(d.fromId))} 應還 ${escapeHTML(memberName(d.toId))} ${formatAmount(d.amount, d.currency)}</span>
-        ${done
-          ? `<button class="undo-btn" onclick="undoItemPaid('${e.id}','${d.fromId}')">✓ 已還</button>`
-          : `<button class="done-btn" onclick="markItemPaid('${e.id}','${d.fromId}')">已還</button>`}
-      </div>`;
-    }).join('');
-    const [, m, dd] = e.date.split('-');
-    return `<div class="item-exp">
-      <div class="head"><span>${escapeHTML(e.title)}</span><small>${Number(m)}/${Number(dd)}・${formatAmount(e.amount, e.currency)}</small></div>
-      ${rows}</div>`;
-  }).join('');
-  return `<div class="card"><details class="items" ${itemsOpen ? 'open' : ''} ontoggle="itemsOpen = this.open">
-    <summary><h2>逐筆明細</h2><span class="hint" style="margin:0">${unpaid ? `${unpaid} 項未還` : '全部已還'} <span class="arrow">▶</span></span></summary>
-    <p class="hint">一筆一筆確認誰還了。按「已還」後，上方「要怎麼還」會自動扣掉。</p>
-    ${body}
-  </details></div>`;
 }
 
 
@@ -2221,7 +2026,7 @@ function renderItemDebts() {
    一直卡在「連線中」時，畫面上會顯示可能原因、錯誤訊息和版本，
    截圖給別人看就能判斷問題出在哪裡。
    ========================================================= */
-const APP_VERSION = '2026-09-25 還款方式';   // 每次改版更新，用來確認上傳的是不是最新檔案
+const APP_VERSION = '2026-09-25 統計頁＋回首頁';   // 每次改版更新，用來確認上傳的是不是最新檔案
 let authResolved = false;
 const diagErrors = [];
 
@@ -2285,10 +2090,7 @@ async function resetDevice() {
 
 
 /* =========================================================
-   還款方式
-   ---------------------------------------------------------
-   還款紀錄多兩個欄位：method（cash / transfer / other）、methodOther（其他的文字）。
-   只是記錄用，不影響結算。
+   還款：已還、一次結清、還款方式、用其他貨幣還
    ========================================================= */
 const REPAY_METHODS = [
   { id: 'cash', icon: '💵', name: '現金' },
@@ -2298,11 +2100,16 @@ const REPAY_METHODS = [
 const REPAY_METHOD_KEY = 'travelSplit_repayMethod';
 const REPAY_OTHER_KEY = 'travelSplit_repayOther';
 
+// 顯示用文字，例如「🏦 轉帳・實付 NT$960（匯率 32）」
 function repayLabel(t) {
+  const parts = [];
+  if (t.method === 'offset') parts.push('⇄ 互相抵銷');
   const m = REPAY_METHODS.find(x => x.id === t.method);
-  if (!m) return '';
-  if (m.id === 'other') return `${m.icon} ${t.methodOther || '其他'}`;
-  return `${m.icon} ${m.name}`;
+  if (m) parts.push(m.id === 'other' ? `${m.icon} ${t.methodOther || '其他'}` : `${m.icon} ${m.name}`);
+  if (t.paidCurrency && t.paidCurrency !== t.currency && t.paidAmount != null) {
+    parts.push(`實付 ${formatAmount(t.paidAmount, t.paidCurrency)}（匯率 ${t.paidRate}）`);
+  }
+  return parts.join('・');
 }
 function rememberRepayMethod(method, other) {
   if (method) localStorage.setItem(REPAY_METHOD_KEY, method); else localStorage.removeItem(REPAY_METHOD_KEY);
@@ -2313,12 +2120,121 @@ function methodChips(selected, onclickFn) {
     `<button class="pick ${m.id === selected ? 'on' : ''}" onclick="${onclickFn}('${m.id}')">${m.icon} ${m.name}</button>`).join('');
 }
 
-/* ---------- 面板（按「已還」、修改還款方式時出現） ---------- */
-let repaySheet = null;   // { method, onConfirm, remember }
+/* ---------- 寫入還款紀錄 ---------- */
+function writeRepayment(expenseId, d, method = null, methodOther = '', paid = null) {
+  const id = newId();
+  tripRef().collection('transfers').doc(id).set({
+    id, expenseId, fromId: d.fromId, toId: d.toId, amount: d.amount, currency: d.currency,
+    method, methodOther,
+    paidCurrency: paid ? paid.currency : null, paidAmount: paid ? paid.amount : null, paidRate: paid ? paid.rate : null,
+    date: todayStr(), createdAt: Date.now(), createdBy: myUid, v: 2
+  }).catch(onWriteError);
+}
 
-function openRepaySheet({ title, desc, method, methodOther, okText, onConfirm, remember = true }) {
+// 儲存支出後呼叫：金額、付款人可能改了，所以先刪掉舊的，再依最新金額重建
+function syncExpenseRepayments(e, allChecked, paidBefore, method, methodOther) {
+  const debts = expenseDebts(e);
+  const old = transfers.filter(t => t.expenseId === e.id);
+  let keep;
+  if (allChecked) keep = debts.map(d => d.fromId);                     // 勾選：全部都還了
+  else if (debts.length && debts.every(d => paidBefore.includes(d.fromId))) keep = [];   // 原本全還，現在取消勾選
+  else keep = paidBefore;                                               // 沒動：保留原本部分還款的人
+  old.forEach(t => tripRef().collection('transfers').doc(t.id).delete().catch(onWriteError));
+  debts.filter(d => keep.includes(d.fromId)).forEach(d => {
+    const prev = old.find(t => t.fromId === d.fromId) || {};
+    // 原本用其他貨幣還的，照原本的匯率重算實付金額（幣別改了就不沿用）
+    const paid = (prev.paidCurrency && prev.paidRate && prev.currency === d.currency)
+      ? { currency: prev.paidCurrency, rate: prev.paidRate, amount: Math.round(d.amount * prev.paidRate) } : null;
+    if (allChecked) writeRepayment(e.id, d, method, methodOther, paid);               // 勾選時：用表單選的還款方式
+    else writeRepayment(e.id, d, prev.method || null, prev.methodOther || '', paid);   // 部分還款：保留原本的方式
+  });
+}
+
+/* ---------- 逐項：已還 ---------- */
+function markItemPaid(expenseId, fromId) {
+  const e = expenses.find(x => x.id === expenseId);
+  const d = e && expenseDebts(e).find(x => x.fromId === fromId);
+  if (!d) return;
+  openRepaySheet({
+    title: '確認已還款',
+    desc: `${memberName(d.fromId)} 還給 ${memberName(d.toId)} ${formatAmount(d.amount, d.currency)}（${e.title}）`,
+    debtCurrency: d.currency, debtAmount: d.amount,
+    onConfirm: (method, other, paid) => writeRepayment(expenseId, d, method, other, paid)
+  });
+}
+
+function undoItemPaid(expenseId, fromId) {
+  const t = repaymentOf(expenseId, fromId);
+  if (!t) return;
+  if (!confirm(`取消「${memberName(fromId)} 已還」？`)) return;
+  tripRef().collection('transfers').doc(t.id).delete().catch(onWriteError);
+}
+
+/* ---------- 未還加總：一次結清 ----------
+   把這兩人之間、這個貨幣所有還沒還的項目一次標記為已還。
+   反方向的項目（例如 A 欠 B 的）標記為「互相抵銷」。 */
+function settlePair(currency, fromId, toId) {
+  const debts = unpaidDebts(currency).filter(d =>
+    (d.fromId === fromId && d.toId === toId) || (d.fromId === toId && d.toId === fromId));
+  if (!debts.length) return;
+  const forward = debts.filter(d => d.fromId === fromId);
+  const backward = debts.filter(d => d.fromId !== fromId);
+  const net = forward.reduce((a, d) => a + d.amount, 0) - backward.reduce((a, d) => a + d.amount, 0);
+  const writeOffsets = () => backward.forEach(d => writeRepayment(d.expenseId, d, 'offset', ''));
+
+  if (net === 0) {
+    if (!confirm(`${memberName(fromId)} 和 ${memberName(toId)} 之間的 ${debts.length} 項剛好互相抵銷，標記為兩清？`)) return;
+    forward.forEach(d => writeRepayment(d.expenseId, d, 'offset', ''));
+    writeOffsets();
+    return;
+  }
+  openRepaySheet({
+    title: '一次結清',
+    desc: `${memberName(fromId)} 還給 ${memberName(toId)} ${formatAmount(net, currency)}（共 ${debts.length} 項）`,
+    debtCurrency: currency, debtAmount: net,
+    onConfirm: (method, other, paid) => {
+      // 用其他貨幣還時，實付金額依各項金額比例分到每一項，加總剛好等於實付金額
+      const paidParts = paid ? allocate(paid.amount, forward.map(d => d.amount)) : null;
+      forward.forEach((d, i) => writeRepayment(d.expenseId, d, method, other,
+        paid ? { currency: paid.currency, rate: paid.rate, amount: paidParts[i] } : null));
+      writeOffsets();
+    }
+  });
+}
+
+/* ---------- 修改已還的紀錄 ---------- */
+function editRepayMethod(transferId) {
+  const t = transfers.find(x => x.id === transferId);
+  if (!t) return;
+  openRepaySheet({
+    title: '修改還款',
+    desc: `${memberName(t.fromId)} 還給 ${memberName(t.toId)} ${formatAmount(t.amount, t.currency)}`,
+    debtCurrency: t.currency, debtAmount: t.amount,
+    method: t.method || null, methodOther: t.methodOther || '',
+    paid: t.paidCurrency ? { currency: t.paidCurrency, amount: t.paidAmount, rate: t.paidRate } : null,
+    okText: '儲存', remember: false,
+    onConfirm: (method, methodOther, paid) =>
+      tripRef().collection('transfers').doc(t.id).update({
+        method, methodOther,
+        paidCurrency: paid ? paid.currency : null, paidAmount: paid ? paid.amount : null, paidRate: paid ? paid.rate : null
+      }).catch(onWriteError)
+  });
+}
+
+/* =========================================================
+   還款面板
+   ---------------------------------------------------------
+   - 還款方式：現金／轉帳／其他（可不選）
+   - 外幣欠款才有：用什麼貨幣還。選原幣以外的貨幣時，
+     輸入匯率或實付金額（改其中一個，另一個自動算），也可以按「抓匯率」。
+   ========================================================= */
+let repaySheet = null;
+
+function openRepaySheet({ title, desc, debtCurrency, debtAmount, method, methodOther, paid, okText, onConfirm, remember = true }) {
   repaySheet = {
     method: method !== undefined ? method : (localStorage.getItem(REPAY_METHOD_KEY) || null),
+    debtCurrency, debtAmount,
+    paidCurrency: paid ? paid.currency : debtCurrency,
     onConfirm, remember
   };
   document.getElementById('repay-title').textContent = title;
@@ -2326,42 +2242,112 @@ function openRepaySheet({ title, desc, method, methodOther, okText, onConfirm, r
   document.getElementById('repay-ok').textContent = okText || '確定';
   document.getElementById('repay-other').value =
     methodOther !== undefined ? methodOther : (localStorage.getItem(REPAY_OTHER_KEY) || '');
+  // 外幣欠款才能選「用其他貨幣還」
+  document.getElementById('repay-cur-box').style.display = debtCurrency !== trip.baseCurrency ? 'block' : 'none';
+  document.getElementById('repay-rate').value = paid ? paid.rate : '';
+  document.getElementById('repay-paid').value = paid ? minorToText(paid.amount, paid.currency) : '';
+  document.getElementById('repay-rate-src').textContent = '';
   renderRepaySheet();
   document.getElementById('repay-sheet').classList.add('show');
 }
+
 function renderRepaySheet() {
-  document.getElementById('repay-methods').innerHTML = methodChips(repaySheet.method, 'pickSheetMethod');
-  document.getElementById('repay-other').style.display = repaySheet.method === 'other' ? 'block' : 'none';
+  const r = repaySheet;
+  document.getElementById('repay-methods').innerHTML = methodChips(r.method, 'pickSheetMethod');
+  document.getElementById('repay-other').style.display = r.method === 'other' ? 'block' : 'none';
+  // 貨幣選項：原幣、結算幣別、其他
+  const order = [r.debtCurrency, trip.baseCurrency, ...Object.keys(CURRENCIES)].filter((c, i, a) => a.indexOf(c) === i);
+  document.getElementById('repay-currencies').innerHTML = order.map(c =>
+    `<button class="pick ${c === r.paidCurrency ? 'on' : ''}" onclick="pickRepayCurrency('${c}')">${c}${c === r.debtCurrency ? '（原幣）' : ''}</button>`).join('');
+  const other = r.paidCurrency !== r.debtCurrency;
+  document.getElementById('repay-rate-box').style.display = other ? 'block' : 'none';
+  if (other) {
+    document.getElementById('repay-rate-label').textContent = `匯率（1 ${r.debtCurrency} ＝ 幾 ${r.paidCurrency}）`;
+    document.getElementById('repay-paid-label').textContent = `實付金額（${r.paidCurrency}）`;
+  }
 }
+
 function pickSheetMethod(id) {
   repaySheet.method = repaySheet.method === id ? null : id;   // 再點一次 = 取消
   renderRepaySheet();
 }
+
+function rateKey(from, to) { return `${from}_${to}`; }
+
+function pickRepayCurrency(c) {
+  const r = repaySheet;
+  if (r.paidCurrency === c) return;
+  r.paidCurrency = c;
+  document.getElementById('repay-rate-src').textContent = '';
+  document.getElementById('repay-rate').value = '';
+  document.getElementById('repay-paid').value = '';
+  renderRepaySheet();
+  if (c !== r.debtCurrency) {
+    // 先帶入上次這兩種貨幣講好的匯率；沒有的話去抓
+    const saved = (trip.rates || {})[rateKey(r.debtCurrency, c)];
+    if (saved) {
+      document.getElementById('repay-rate').value = saved;
+      onRepayRateInput();
+      document.getElementById('repay-rate-src').textContent = '上次使用的匯率，可以修改';
+    } else fetchRepayRate();
+  }
+}
+
+// 改匯率 → 重算實付金額
+function onRepayRateInput() {
+  const r = repaySheet;
+  const rate = parseFloat(document.getElementById('repay-rate').value);
+  document.getElementById('repay-paid').value = rate > 0 ? minorToText(Math.round(r.debtAmount * rate), r.paidCurrency) : '';
+}
+// 改實付金額 → 反推匯率
+function onRepayPaidInput() {
+  const r = repaySheet;
+  const paid = parseAmount(document.getElementById('repay-paid').value || '0', r.paidCurrency);
+  if (paid && r.debtAmount) document.getElementById('repay-rate').value = parseFloat((paid / r.debtAmount).toPrecision(6));
+  document.getElementById('repay-rate-src').textContent = '依實付金額計算';
+}
+
+async function fetchRepayRate() {
+  const r = repaySheet;
+  const from = r.debtCurrency, to = r.paidCurrency;
+  const src = document.getElementById('repay-rate-src');
+  if (!navigator.onLine) { src.textContent = '目前離線，請手動輸入'; return; }
+  src.textContent = '正在抓匯率…';
+  try {
+    const { rate, date } = await getRate(from, to, todayStr());
+    if (repaySheet !== r || r.paidCurrency !== to) return;   // 面板已關閉或換了貨幣
+    document.getElementById('repay-rate').value = rate;
+    onRepayRateInput();
+    const [, m, d] = date.split('-');
+    src.textContent = `${Number(m)}/${Number(d)} 國際市場匯率，可以改成你們講好的數字`;
+  } catch (e) {
+    if (repaySheet === r) src.textContent = '抓不到匯率，請手動輸入';
+  }
+}
+
 function closeRepaySheet() {
   document.getElementById('repay-sheet').classList.remove('show');
   repaySheet = null;
 }
-function confirmRepaySheet() {
-  if (!repaySheet) return;
-  const method = repaySheet.method;
-  const other = method === 'other' ? document.getElementById('repay-other').value.trim() : '';
-  if (repaySheet.remember) rememberRepayMethod(method, other);
-  const fn = repaySheet.onConfirm;
-  closeRepaySheet();
-  fn(method, other);
-}
 
-// 已還款紀錄：修改還款方式
-function editRepayMethod(transferId) {
-  const t = transfers.find(x => x.id === transferId);
-  if (!t) return;
-  openRepaySheet({
-    title: '修改還款方式',
-    desc: `${memberName(t.fromId)} 給 ${memberName(t.toId)} ${formatAmount(t.amount, t.currency)}`,
-    method: t.method || null, methodOther: t.methodOther || '', okText: '儲存', remember: false,
-    onConfirm: (method, methodOther) =>
-      tripRef().collection('transfers').doc(t.id).update({ method, methodOther }).catch(onWriteError)
-  });
+function confirmRepaySheet() {
+  const r = repaySheet;
+  if (!r) return;
+  const method = r.method;
+  const other = method === 'other' ? document.getElementById('repay-other').value.trim() : '';
+  let paid = null;
+  if (r.paidCurrency !== r.debtCurrency) {
+    const amount = parseAmount(document.getElementById('repay-paid').value || '', r.paidCurrency);
+    const rate = parseFloat(document.getElementById('repay-rate').value);
+    if (!amount || !(rate > 0)) { alert('請輸入匯率或實付金額'); return; }
+    paid = { currency: r.paidCurrency, amount, rate };
+    // 記住這次講好的匯率，下次同樣的貨幣會自動帶入
+    tripRef().update({ ['rates.' + rateKey(r.debtCurrency, r.paidCurrency)]: rate }).catch(onWriteError);
+  }
+  if (r.remember) rememberRepayMethod(method, other);
+  const fn = r.onConfirm;
+  closeRepaySheet();
+  fn(method, other, paid);
 }
 
 /* ---------- 新增支出表單：勾「當場已結清」時選還款方式 ---------- */
@@ -2375,6 +2361,66 @@ function renderFormRepay() {
 function pickFormRepay(id) {
   draft.repayMethod = draft.repayMethod === id ? null : id;
   renderFormRepay();
+}
+
+
+/* =========================================================
+   統計
+   ---------------------------------------------------------
+   全部用已經記下的支出算，不需要另外輸入。各幣別分開，不互相換算。
+   ========================================================= */
+// 一組橫條：rows = [{ label, value }]，長度依最大值比例
+function barRows(rows, currency) {
+  const total = rows.reduce((a, r) => a + r.value, 0);
+  const max = Math.max(...rows.map(r => r.value), 1);
+  return rows.map(r => `<div class="stat-row">
+      <span>${r.label}</span>
+      <span class="bar"><span style="width:${Math.max(2, r.value / max * 100)}%"></span></span>
+      <span class="val">${formatAmount(r.value, currency)}<small>${total ? Math.round(r.value / total * 100) : 0}%</small></span>
+    </div>`).join('');
+}
+
+function renderStats() {
+  const box = document.getElementById('stats-box');
+  if (!trip) return;
+  if (!expenses.length) {
+    box.innerHTML = '<div class="empty"><strong>還沒有支出</strong>記幾筆帳之後，這裡會顯示花費統計</div>';
+    return;
+  }
+  let html = '';
+  for (const c of tripCurrencies()) {
+    const list = expenses.filter(e => e.currency === c);
+    const total = list.reduce((a, e) => a + e.amount, 0);
+
+    // 分類
+    const byCat = CATEGORIES.map(cat => ({
+      label: `${cat.icon} ${cat.name}`,
+      value: list.filter(e => (e.category || 'other') === cat.id).reduce((a, e) => a + e.amount, 0)
+    })).filter(r => r.value).sort((a, b) => b.value - a.value);
+
+    // 每日（依日期排序）
+    const days = {};
+    list.forEach(e => { days[e.date] = (days[e.date] || 0) + e.amount; });
+    const byDay = Object.keys(days).sort().map(d => {
+      const [, m, dd] = d.split('-');
+      return { label: `${Number(m)}/${Number(dd)}`, value: days[d] };
+    });
+
+    // 付款方式
+    const byMethod = [...PAY_METHODS.map(m => ({ id: m.id, label: `${m.icon} ${m.name}` })), { id: null, label: '未填' }]
+      .map(m => ({ label: m.label, value: list.filter(e => (e.paymentMethod || null) === m.id).reduce((a, e) => a + e.amount, 0) }))
+      .filter(r => r.value);
+
+    html += `<div class="card">
+      <div class="block-head"><h2>${CURRENCIES[c].name} ${c}</h2><span>總花費 <b>${formatAmount(total, c)}</b></span></div>
+      ${section('cat-' + c, '分類', '', barRows(byCat, c), true)}
+      ${section('day-' + c, '每日', `${byDay.length} 天`, barRows(byDay, c), true)}
+      ${section('pm-' + c, '付款方式', '', barRows(byMethod, c) +
+        (byMethod.some(r => r.label.includes('信用卡')) ? '<p class="hint">收到信用卡帳單時，可以用刷卡總額核對</p>' : ''), false)}
+    </div>`;
+  }
+  html += `<div class="card"><h2>每人花費</h2>${renderSpending()}</div>`;
+  box.innerHTML = html;
 }
 
 /* ---------- 啟動（永遠放在 script 最後面，所有變數和函式都定義好之後才執行） ---------- */

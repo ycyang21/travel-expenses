@@ -310,6 +310,22 @@
   details.more > summary { list-style: none; cursor: pointer; color: var(--stamp); font-size: 15px; padding: 6px 0; }
   details.more > summary::-webkit-details-marker { display: none; }
   details.more[open] > summary { color: var(--muted); }
+
+  /* ===== 換匯、筆記 ===== */
+  .list-tabs { margin: 0 0 14px; }
+  .list-tabs button { font-size: 15px; }
+  .rec { display: block; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line);
+         border-radius: 12px; padding: 12px 14px; margin-bottom: 8px; color: var(--ink); }
+  .rec .top { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; }
+  .rec .sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .rec .body { font-size: 14px; color: var(--muted); margin-top: 4px; white-space: pre-wrap;
+               display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .ex-row { display: flex; gap: 8px; }
+  .ex-row input { flex: 1; min-width: 0; font-size: 20px; font-weight: 600; }
+  .ex-row select { width: 96px; }
+  .ex-rate { margin-top: 10px; font-size: 15px; color: var(--stamp); font-weight: 600; min-height: 22px; }
+  textarea.tall { min-height: 200px; }
+  .summary-line { font-size: 14px; color: var(--muted); margin: 0 4px 10px; }
 </style>
 </head>
 <body>
@@ -376,7 +392,58 @@
 
   <!-- 頁面 1：支出列表 -->
   <section class="page" id="page-list">
+    <div class="seg list-tabs">
+      <button id="lt-expenses" onclick="setListTab('expenses')">🧾 支出</button>
+      <button id="lt-exchanges" onclick="setListTab('exchanges')">💱 換匯</button>
+      <button id="lt-notes" onclick="setListTab('notes')">📝 筆記</button>
+    </div>
     <div id="expense-list"></div>
+    <div id="exchange-list" style="display:none"></div>
+    <div id="note-list" style="display:none"></div>
+  </section>
+
+  <!-- 新增／編輯換匯 -->
+  <section class="page" id="page-exchange">
+    <div class="card">
+      <div class="form-top"><h2 id="ex-title">新增換匯</h2><button onclick="goHome()">取消</button></div>
+      <p class="hint" style="margin-top:4px">換匯不算支出，不會算進花費、結算和統計。</p>
+      <label for="ex-date">日期</label>
+      <input id="ex-date" type="date">
+      <label>誰換的</label>
+      <div class="pick-list" id="ex-member"></div>
+      <label for="ex-from">付出</label>
+      <div class="ex-row">
+        <input id="ex-from" inputmode="decimal" placeholder="例如 10000" oninput="updateExRate()">
+        <select id="ex-from-cur" onchange="updateExRate()"></select>
+      </div>
+      <label for="ex-to">換到</label>
+      <div class="ex-row">
+        <input id="ex-to" inputmode="decimal" placeholder="例如 310.50" oninput="updateExRate()">
+        <select id="ex-to-cur" onchange="updateExRate()"></select>
+      </div>
+      <div class="ex-rate" id="ex-rate"></div>
+      <label for="ex-place">在哪裡換</label>
+      <input id="ex-place" placeholder="例如：台灣銀行、機場換匯所（可不填）">
+      <label for="ex-note">備註</label>
+      <textarea id="ex-note" placeholder="例如：手續費 100 元"></textarea>
+      <button class="btn" onclick="saveExchange()" id="ex-save">儲存</button>
+      <button class="btn danger" onclick="deleteExchange()" id="ex-delete">刪除這筆</button>
+    </div>
+  </section>
+
+  <!-- 新增／編輯筆記 -->
+  <section class="page" id="page-note">
+    <div class="card">
+      <div class="form-top"><h2 id="nt-heading">新增筆記</h2><button onclick="goHome()">取消</button></div>
+      <label for="nt-date">日期</label>
+      <input id="nt-date" type="date">
+      <label for="nt-title">標題</label>
+      <input id="nt-title" placeholder="例如：飯店 Wi-Fi、集合時間、退稅">
+      <label for="nt-content">內容</label>
+      <textarea id="nt-content" class="tall" placeholder="想記下的事"></textarea>
+      <button class="btn" onclick="saveNote()" id="nt-save">儲存</button>
+      <button class="btn danger" onclick="deleteNote()" id="nt-delete">刪除這則</button>
+    </div>
   </section>
 
   <!-- 頁面 2：新增／編輯支出 -->
@@ -514,6 +581,10 @@
           <button class="rate-fetch" onclick="fetchRepayRate()">🔄 抓匯率</button>
         </div>
         <div class="hint" id="repay-rate-src"></div>
+        <div id="repay-ex-box" style="display:none">
+          <label>用換匯時的匯率</label>
+          <div class="pick-list" id="repay-ex-chips"></div>
+        </div>
         <label for="repay-paid" id="repay-paid-label">實付金額</label>
         <input id="repay-paid" inputmode="decimal" placeholder="0" oninput="onRepayPaidInput()">
       </div>
@@ -624,6 +695,7 @@ let trip = null;
 let expenses = [];
 let transfers = [];
 let rawExpenses = [], rawTransfers = [];   // 雲端讀到的原始資料（可能是舊格式）
+let exchanges = [], notes = [];              // 換匯紀錄、旅遊筆記
 let setupMembers = [];
 let unsubscribers = [];   // 切換旅程時要停止監聽舊旅程
 let joinTrip = null;      // 加入流程中，正在看的旅程
@@ -756,7 +828,7 @@ let prevTripId = null;   // 從旅程裡點「切換旅程」時，記住原本�
 
 async function showTripPicker() {
   stopListening();
-  tripId = null; trip = null; expenses = []; transfers = []; rawExpenses = []; rawTransfers = [];
+  tripId = null; trip = null; expenses = []; transfers = []; rawExpenses = []; rawTransfers = []; exchanges = []; notes = [];
   // 只是來看看旅程列表的話，重新整理後還是回到原本的旅程
   if (!prevTripId) localStorage.removeItem(CURRENT_TRIP_KEY);
   document.getElementById('tabs').classList.remove('show');
@@ -829,7 +901,7 @@ function openTrip(id) {
   prevTripId = null;
   stopListening();
   tripId = id;
-  trip = null; expenses = []; transfers = []; rawExpenses = []; rawTransfers = [];
+  trip = null; expenses = []; transfers = []; rawExpenses = []; rawTransfers = []; exchanges = []; notes = [];
   localStorage.setItem(CURRENT_TRIP_KEY, id);
   setHeader('旅途分帳', '讀取中…');
 
@@ -856,6 +928,16 @@ function openTrip(id) {
   unsubscribers.push(tripRef().collection('transfers').onSnapshot(snap => {
     rawTransfers = snap.docs.map(d => d.data());
     render();
+  }, console.error));
+
+  // 換匯紀錄、旅遊筆記（安全規則的 {sub} 已經涵蓋，不用改規則）
+  unsubscribers.push(tripRef().collection('exchanges').onSnapshot(snap => {
+    exchanges = snap.docs.map(d => d.data());
+    if (trip) renderExchanges();
+  }, console.error));
+  unsubscribers.push(tripRef().collection('notes').onSnapshot(snap => {
+    notes = snap.docs.map(d => d.data());
+    if (trip) renderNotes();
   }, console.error));
 }
 
@@ -952,6 +1034,8 @@ async function deleteTrip() {
   expenses.forEach(e => batch.delete(tripRef().collection('expenses').doc(e.id)));
   transfers.forEach(t => batch.delete(tripRef().collection('transfers').doc(t.id)));
   expenses.forEach(e => (e.photoIds || []).forEach(pid => batch.delete(tripRef().collection('photos').doc(pid))));
+  exchanges.forEach(x => batch.delete(tripRef().collection('exchanges').doc(x.id)));
+  notes.forEach(n => batch.delete(tripRef().collection('notes').doc(n.id)));
   batch.delete(tripRef());
   prevTripId = null;
   showTripPicker();
@@ -974,6 +1058,8 @@ function render() {
 
   document.getElementById('tabs').classList.add('show');
   renderList();
+  renderExchanges();
+  renderNotes();
   const current = document.querySelector('.page.active');
   if (!current || current.id === 'page-setup' || current.id === 'page-join') showPage('page-list');
   else if (current.id === 'page-settle') renderSettle();
@@ -2126,7 +2212,7 @@ async function logout() {
    一直卡在「連線中」時，畫面上會顯示可能原因、錯誤訊息和版本，
    截圖給別人看就能判斷問題出在哪裡。
    ========================================================= */
-const APP_VERSION = '2026-09-25 個人開銷';   // 每次改版更新，用來確認上傳的是不是最新檔案
+const APP_VERSION = '2026-09-25 還款帶入換匯匯率';   // 每次改版更新，用來確認上傳的是不是最新檔案
 let authResolved = false;
 const diagErrors = [];
 
@@ -2260,7 +2346,7 @@ function markItemPaid(expenseId, fromId) {
   openRepaySheet({
     title: '確認已還款',
     desc: `${memberName(d.fromId)} 還給 ${memberName(d.toId)} ${formatAmount(d.amount, d.currency)}（${e.title}）`,
-    debtCurrency: d.currency, debtAmount: d.amount,
+    debtCurrency: d.currency, debtAmount: d.amount, creditorId: d.toId,
     onConfirm: (method, other, paid) => writeRepayment(expenseId, d, method, other, paid)
   });
 }
@@ -2293,7 +2379,7 @@ function settlePair(currency, fromId, toId) {
   openRepaySheet({
     title: '一次結清',
     desc: `${memberName(fromId)} 還給 ${memberName(toId)} ${formatAmount(net, currency)}（共 ${debts.length} 項）`,
-    debtCurrency: currency, debtAmount: net,
+    debtCurrency: currency, debtAmount: net, creditorId: toId,
     onConfirm: (method, other, paid) => {
       // 用其他貨幣還時，實付金額依各項金額比例分到每一項，加總剛好等於實付金額
       const paidParts = paid ? allocate(paid.amount, forward.map(d => d.amount)) : null;
@@ -2311,7 +2397,7 @@ function editRepayMethod(transferId) {
   openRepaySheet({
     title: '修改還款',
     desc: `${memberName(t.fromId)} 還給 ${memberName(t.toId)} ${formatAmount(t.amount, t.currency)}`,
-    debtCurrency: t.currency, debtAmount: t.amount,
+    debtCurrency: t.currency, debtAmount: t.amount, creditorId: t.toId,
     method: t.method || null, methodOther: t.methodOther || '',
     paid: t.paidCurrency ? { currency: t.paidCurrency, amount: t.paidAmount, rate: t.paidRate } : null,
     okText: '儲存', remember: false,
@@ -2332,10 +2418,10 @@ function editRepayMethod(transferId) {
    ========================================================= */
 let repaySheet = null;
 
-function openRepaySheet({ title, desc, debtCurrency, debtAmount, method, methodOther, paid, okText, onConfirm, remember = true }) {
+function openRepaySheet({ title, desc, debtCurrency, debtAmount, creditorId, method, methodOther, paid, okText, onConfirm, remember = true }) {
   repaySheet = {
     method: method !== undefined ? method : (localStorage.getItem(REPAY_METHOD_KEY) || null),
-    debtCurrency, debtAmount,
+    debtCurrency, debtAmount, creditorId,
     paidCurrency: paid ? paid.currency : debtCurrency,
     onConfirm, remember
   };
@@ -2363,6 +2449,10 @@ function renderRepaySheet() {
     `<button class="pick ${c === r.paidCurrency ? 'on' : ''}" onclick="pickRepayCurrency('${c}')">${c}${c === r.debtCurrency ? '（原幣）' : ''}</button>`).join('');
   const other = r.paidCurrency !== r.debtCurrency;
   document.getElementById('repay-rate-box').style.display = other ? 'block' : 'none';
+  const exRates = other ? exchangeRatesFor(r.debtCurrency, r.paidCurrency, r.creditorId) : [];
+  document.getElementById('repay-ex-box').style.display = exRates.length ? 'block' : 'none';
+  document.getElementById('repay-ex-chips').innerHTML = exRates.map(x =>
+    `<button class="pick" onclick="useExchangeRate(${x.rate}, '${x.memberId}')">${escapeHTML(memberName(x.memberId))} ${x.rate}</button>`).join('');
   if (other) {
     document.getElementById('repay-rate-label').textContent = `匯率（1 ${r.debtCurrency} ＝ 幾 ${r.paidCurrency}）`;
     document.getElementById('repay-paid-label').textContent = `實付金額（${r.paidCurrency}）`;
@@ -2391,7 +2481,11 @@ function pickRepayCurrency(c) {
       document.getElementById('repay-rate').value = saved;
       onRepayRateInput();
       document.getElementById('repay-rate-src').textContent = '上次使用的匯率，可以修改';
-    } else fetchRepayRate();
+    } else {
+      const own = exchangeRatesFor(r.debtCurrency, c, r.creditorId).find(x => x.memberId === r.creditorId);
+      if (own) useExchangeRate(own.rate, own.memberId);
+      else fetchRepayRate();
+    }
   }
 }
 
@@ -2576,8 +2670,220 @@ function renderStats() {
   box.innerHTML = html;
 }
 
+
+/* =========================================================
+   換匯紀錄、旅遊筆記
+   ---------------------------------------------------------
+   都不是支出，不影響花費、結算、統計。存在旅程底下的
+   exchanges、notes 兩個 collection，旅伴之間共用、即時同步。
+   exchange：{ id, date, memberId, fromCurrency, fromAmount, toCurrency, toAmount, place, note, ... }
+   note：    { id, date, title, content, ... }
+   ========================================================= */
+let listTab = 'expenses';   // 支出頁目前在哪個分頁
+let exDraft = null, ntDraft = null;
+
+function setListTab(t) {
+  listTab = t;
+  ['expenses', 'exchanges', 'notes'].forEach(k => {
+    document.getElementById('lt-' + k).classList.toggle('on', k === t);
+  });
+  document.getElementById('expense-list').style.display = t === 'expenses' ? 'block' : 'none';
+  document.getElementById('exchange-list').style.display = t === 'exchanges' ? 'block' : 'none';
+  document.getElementById('note-list').style.display = t === 'notes' ? 'block' : 'none';
+}
+
+function shortDate(d) {
+  const [, m, dd] = d.split('-');
+  return `${Number(m)}/${Number(dd)}`;
+}
+function sortByDateDesc(list) {
+  return [...list].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
+}
+
+/* ---------- 換匯 ---------- */
+// 匯率用「1 外幣 = 幾元主要貨幣」的方向顯示，比較符合習慣（例如 1 USD = 32.2 TWD）
+function exRateText(fromAmt, fromCur, toAmt, toCur) {
+  if (!fromAmt || !toAmt || fromCur === toCur) return '';
+  const r = (a, b) => parseFloat((a / b).toPrecision(6));
+  if (toCur !== trip.baseCurrency) return `匯率：1 ${toCur} ＝ ${r(fromAmt, toAmt)} ${fromCur}`;
+  return `匯率：1 ${fromCur} ＝ ${r(toAmt, fromAmt)} ${toCur}`;
+}
+
+function renderExchanges() {
+  const box = document.getElementById('exchange-list');
+  let html = '<button class="btn ghost" style="margin:0 0 14px" onclick="openExchangeForm()">＋ 新增換匯</button>';
+  if (!exchanges.length) {
+    box.innerHTML = html + '<div class="empty"><strong>還沒有換匯紀錄</strong>出發前換的外幣可以記在這裡，不會算進支出</div>';
+    return;
+  }
+  // 總計：每個人各換到多少外幣
+  const totals = {};
+  exchanges.forEach(x => {
+    const k = x.memberId;
+    totals[k] = totals[k] || {};
+    totals[k][x.toCurrency] = (totals[k][x.toCurrency] || 0) + x.toAmount;
+  });
+  html += '<div class="summary-line">' + Object.entries(totals).map(([id, byCur]) =>
+    `${escapeHTML(memberName(id))} 換到 ${Object.entries(byCur).map(([c, v]) => formatAmount(v, c)).join('、')}`).join('<br>') + '</div>';
+  html += sortByDateDesc(exchanges).map(x => `<button class="rec" onclick="openExchangeForm('${x.id}')">
+      <div class="top"><span>${escapeHTML(memberName(x.memberId))}：${formatAmount(x.fromAmount, x.fromCurrency)} → ${formatAmount(x.toAmount, x.toCurrency)}</span></div>
+      <div class="sub">${shortDate(x.date)}・${exRateText(x.fromAmount, x.fromCurrency, x.toAmount, x.toCurrency).replace('匯率：', '')}${x.place ? '・' + escapeHTML(x.place) : ''}</div>
+      ${x.note ? `<div class="body">${escapeHTML(x.note)}</div>` : ''}
+    </button>`).join('');
+  box.innerHTML = html;
+}
+
+function currencyOptions(selected) {
+  return Object.keys(CURRENCIES).map(c => `<option value="${c}" ${c === selected ? 'selected' : ''}>${c}</option>`).join('');
+}
+
+function openExchangeForm(id) {
+  const x = id ? exchanges.find(e => e.id === id) : null;
+  // 換到的貨幣：預設是這趟旅程用過的第一個外幣，沒有的話用美元
+  const foreign = (x && x.toCurrency) || tripCurrencies().find(c => c !== trip.baseCurrency) ||
+    (trip.baseCurrency === 'USD' ? 'JPY' : 'USD');
+  exDraft = { id: x ? x.id : null, memberId: x ? x.memberId : (myMember() || trip.members[0]).id };
+  document.getElementById('ex-title').textContent = x ? '編輯換匯' : '新增換匯';
+  document.getElementById('ex-date').value = x ? x.date : todayStr();
+  document.getElementById('ex-from').value = x ? minorToText(x.fromAmount, x.fromCurrency) : '';
+  document.getElementById('ex-to').value = x ? minorToText(x.toAmount, x.toCurrency) : '';
+  document.getElementById('ex-from-cur').innerHTML = currencyOptions(x ? x.fromCurrency : trip.baseCurrency);
+  document.getElementById('ex-to-cur').innerHTML = currencyOptions(foreign);
+  document.getElementById('ex-place').value = x ? (x.place || '') : '';
+  document.getElementById('ex-note').value = x ? (x.note || '') : '';
+  document.getElementById('ex-delete').style.display = x ? 'block' : 'none';
+  renderExMember();
+  updateExRate();
+  showPage('page-exchange');
+}
+
+function renderExMember() {
+  document.getElementById('ex-member').innerHTML = trip.members.map(m =>
+    `<button class="pick ${m.id === exDraft.memberId ? 'on' : ''}" onclick="exDraft.memberId='${m.id}';renderExMember()">${escapeHTML(m.name)}</button>`).join('');
+}
+
+function readExForm() {
+  const fromCur = document.getElementById('ex-from-cur').value;
+  const toCur = document.getElementById('ex-to-cur').value;
+  return {
+    fromCur, toCur,
+    fromAmt: parseAmount(document.getElementById('ex-from').value || '', fromCur),
+    toAmt: parseAmount(document.getElementById('ex-to').value || '', toCur)
+  };
+}
+function updateExRate() {
+  const f = readExForm();
+  document.getElementById('ex-rate').textContent = exRateText(f.fromAmt, f.fromCur, f.toAmt, f.toCur);
+}
+
+function saveExchange() {
+  const f = readExForm();
+  if (!f.fromAmt || !f.toAmt) { alert('請輸入付出和換到的金額（最多到小數點後兩位）'); return; }
+  if (f.fromCur === f.toCur) { alert('付出和換到的貨幣不能一樣'); return; }
+  const now = Date.now();
+  const data = {
+    date: document.getElementById('ex-date').value || todayStr(),
+    memberId: exDraft.memberId,
+    fromCurrency: f.fromCur, fromAmount: f.fromAmt,
+    toCurrency: f.toCur, toAmount: f.toAmt,
+    place: document.getElementById('ex-place').value.trim(),
+    note: document.getElementById('ex-note').value.trim(),
+    updatedAt: now
+  };
+  const col = tripRef().collection('exchanges');
+  if (exDraft.id) col.doc(exDraft.id).update(data).catch(onWriteError);
+  else { const id = newId(); col.doc(id).set({ id, createdAt: now, createdBy: myUid, ...data }).catch(onWriteError); }
+  exDraft = null;
+  setListTab('exchanges');
+  showPage('page-list');
+}
+
+function deleteExchange() {
+  if (!exDraft || !exDraft.id || !confirm('確定刪除這筆換匯紀錄？')) return;
+  tripRef().collection('exchanges').doc(exDraft.id).delete().catch(onWriteError);
+  exDraft = null;
+  setListTab('exchanges');
+  showPage('page-list');
+}
+
+/* ---------- 筆記 ---------- */
+function renderNotes() {
+  const box = document.getElementById('note-list');
+  let html = '<button class="btn ghost" style="margin:0 0 14px" onclick="openNoteForm()">＋ 新增筆記</button>';
+  if (!notes.length) {
+    box.innerHTML = html + '<div class="empty"><strong>還沒有筆記</strong>飯店 Wi-Fi、集合時間、退稅資訊這類瑣碎的事，可以記在這裡</div>';
+    return;
+  }
+  html += sortByDateDesc(notes).map(n => `<button class="rec" onclick="openNoteForm('${n.id}')">
+      <div class="top"><span>${escapeHTML(n.title || '（沒有標題）')}</span><span class="sub" style="margin:0;font-weight:400">${shortDate(n.date)}</span></div>
+      ${n.content ? `<div class="body">${escapeHTML(n.content)}</div>` : ''}
+    </button>`).join('');
+  box.innerHTML = html;
+}
+
+function openNoteForm(id) {
+  const n = id ? notes.find(x => x.id === id) : null;
+  ntDraft = { id: n ? n.id : null };
+  document.getElementById('nt-heading').textContent = n ? '編輯筆記' : '新增筆記';
+  document.getElementById('nt-date').value = n ? n.date : todayStr();
+  document.getElementById('nt-title').value = n ? (n.title || '') : '';
+  document.getElementById('nt-content').value = n ? (n.content || '') : '';
+  document.getElementById('nt-delete').style.display = n ? 'block' : 'none';
+  showPage('page-note');
+}
+
+function saveNote() {
+  const title = document.getElementById('nt-title').value.trim();
+  const content = document.getElementById('nt-content').value.trim();
+  if (!title && !content) { alert('請輸入標題或內容'); return; }
+  const now = Date.now();
+  const data = { date: document.getElementById('nt-date').value || todayStr(), title, content, updatedAt: now };
+  const col = tripRef().collection('notes');
+  if (ntDraft.id) col.doc(ntDraft.id).update(data).catch(onWriteError);
+  else { const id = newId(); col.doc(id).set({ id, createdAt: now, createdBy: myUid, ...data }).catch(onWriteError); }
+  ntDraft = null;
+  setListTab('notes');
+  showPage('page-list');
+}
+
+function deleteNote() {
+  if (!ntDraft || !ntDraft.id || !confirm('確定刪除這則筆記？')) return;
+  tripRef().collection('notes').doc(ntDraft.id).delete().catch(onWriteError);
+  ntDraft = null;
+  setListTab('notes');
+  showPage('page-list');
+}
+
+
+/* ---------- 還款時帶入換匯匯率 ----------
+   找出「付出 paidCur、換到 debtCur」（或反方向）的換匯紀錄，
+   每個人算一個平均匯率（總付出 ÷ 總換到），收錢的人排第一個。
+   回傳 [{ memberId, rate }]，rate = 1 debtCur 等於幾 paidCur */
+function exchangeRatesFor(debtCur, paidCur, creditorId) {
+  const sum = {};
+  for (const x of exchanges) {
+    let paid, got;
+    if (x.fromCurrency === paidCur && x.toCurrency === debtCur) { paid = x.fromAmount; got = x.toAmount; }
+    else if (x.fromCurrency === debtCur && x.toCurrency === paidCur) { paid = x.toAmount; got = x.fromAmount; }
+    else continue;
+    sum[x.memberId] = sum[x.memberId] || { paid: 0, got: 0 };
+    sum[x.memberId].paid += paid;
+    sum[x.memberId].got += got;
+  }
+  return Object.entries(sum)
+    .map(([memberId, v]) => ({ memberId, rate: parseFloat((v.paid / v.got).toPrecision(6)) }))
+    .sort((a, b) => (b.memberId === creditorId) - (a.memberId === creditorId));
+}
+
+function useExchangeRate(rate, memberId) {
+  document.getElementById('repay-rate').value = rate;
+  onRepayRateInput();
+  document.getElementById('repay-rate-src').textContent = `用 ${memberName(memberId)} 換匯時的匯率`;
+}
+
 /* ---------- 啟動（永遠放在 script 最後面，所有變數和函式都定義好之後才執行） ---------- */
 document.getElementById('app-version').textContent = '版本 ' + APP_VERSION;
+setListTab('expenses');
 startApp();
 setTimeout(() => { if (!authResolved) showDiag('連線超過 15 秒還沒完成'); }, 15000);
 </script>

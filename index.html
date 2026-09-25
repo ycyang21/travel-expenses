@@ -296,6 +296,20 @@
   .form-top { display: flex; justify-content: space-between; align-items: center; }
   .form-top h2 { margin: 0; }
   .form-top button { border: 0; background: none; color: var(--muted); font-size: 15px; padding: 4px 0 4px 12px; }
+
+  /* ===== 新增支出：付／分／還 三段 ===== */
+  .form-sec { display: flex; align-items: center; gap: 10px; margin: 26px 0 0; color: var(--stamp); font-weight: 700; font-size: 16px; }
+  .form-sec::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .repay-row { padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .repay-row:last-child { border-bottom: 0; }
+  .repay-row .check-row { margin: 0; }
+  .repay-row .mini-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0 32px; }
+  .pick.mini { padding: 5px 10px; font-size: 14px; }
+  .repay-row .repay-other { margin: 8px 0 0 32px; width: calc(100% - 32px); }
+  details.more { margin-top: 22px; }
+  details.more > summary { list-style: none; cursor: pointer; color: var(--stamp); font-size: 15px; padding: 6px 0; }
+  details.more > summary::-webkit-details-marker { display: none; }
+  details.more[open] > summary { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -388,45 +402,42 @@
       <label for="f-date">日期</label>
       <input id="f-date" type="date">
 
-      <label>怎麼付</label>
-      <div class="seg" style="margin-top:0">
-        <button id="seg-equal" onclick="setSplitType('equal')">平均分攤</button>
-        <button id="seg-custom" onclick="setSplitType('custom')">自訂金額</button>
-        <button id="seg-self" onclick="setSplitType('self')">各付各的</button>
-      </div>
-      <div class="hint" id="split-hint"></div>
-
-      <!-- 各付各的沒有「誰付的錢」，整塊隱藏 -->
-      <div id="payer-box">
-        <label>誰付的錢</label>
-        <div class="pick-list" id="f-payer"></div>
-        <label class="check-row">
-          <input type="checkbox" id="f-settled" onchange="renderFormRepay()">
-          <span>當場已結清<small id="f-settled-hint">其他人已經把自己那份還給付款人，結算時不會再出現這筆欠款</small></span>
-        </label>
-        <div id="f-repay-box" style="display:none">
-          <label>還款方式</label>
-          <div class="pick-list" id="f-repay-methods"></div>
-          <input id="f-repay-other" placeholder="例如：LINE Pay、美金現金" style="display:none;margin-top:8px">
-        </div>
-      </div>
-
-      <label>付款方式</label>
+      <!-- ── 付 ── -->
+      <div class="form-sec">付</div>
+      <label>誰付的</label>
+      <div class="pick-list" id="f-payer"></div>
+      <label>用什麼付</label>
       <div class="pick-list" id="f-method"></div>
       <input id="f-method-other" placeholder="例如：Apple Pay、悠遊卡、旅遊卡" style="display:none;margin-top:8px">
 
-      <label id="participants-label">誰要分攤</label>
+      <!-- ── 分 ── -->
+      <div class="form-sec">分</div>
+      <label id="participants-label">誰要分</label>
       <div class="pick-list" id="f-participants"></div>
-
+      <label>怎麼分</label>
+      <div class="seg" style="margin-top:0">
+        <button id="seg-equal" onclick="setSplitMode('equal')">平均</button>
+        <button id="seg-custom" onclick="setSplitMode('custom')">自訂金額</button>
+      </div>
+      <div class="hint" id="split-hint"></div>
       <div id="split-detail"></div>
 
-      <label for="f-note">備註</label>
-      <textarea id="f-note" placeholder="想補充的事，例如：含小費 18%"></textarea>
+      <!-- ── 還 ──（各自付時隱藏：沒有人欠錢） -->
+      <div id="repay-sec">
+        <div class="form-sec">還</div>
+        <label>當場已經還錢的人</label>
+        <div id="f-repay-list"></div>
+      </div>
 
-      <label>照片（收據、菜單等，最多 4 張）</label>
-      <div class="photo-grid" id="f-photos"></div>
-      <!-- 隱藏的選檔元件：手機上會讓你選「拍照」或「從相簿選」 -->
-      <input type="file" id="f-photo-input" accept="image/*" multiple hidden onchange="addPhotos(this.files); this.value=''">
+      <details class="more" id="f-more">
+        <summary>＋ 備註、照片</summary>
+        <label for="f-note">備註</label>
+        <textarea id="f-note" placeholder="想補充的事，例如：含小費 18%"></textarea>
+        <label>照片（收據、菜單等，最多 4 張）</label>
+        <div class="photo-grid" id="f-photos"></div>
+        <!-- 隱藏的選檔元件：手機上會讓你選「拍照」或「從相簿選」 -->
+        <input type="file" id="f-photo-input" accept="image/*" multiple hidden onchange="addPhotos(this.files); this.value=''">
+      </details>
 
       <button class="btn" onclick="saveExpense()" id="save-btn">儲存支出</button>
       <button class="btn danger" onclick="deleteExpense()" id="delete-btn">刪除這筆</button>
@@ -1099,8 +1110,10 @@ function openAddForm() {
     category: 'food',
     payerId: (myMember() || trip.members[0]).id,   // 預設是自己付的
     participants: trip.members.map(m => m.id),   // 預設全員分攤
-    splitType: 'equal',
-    customText: {}                                // 自訂金額的輸入文字
+    selfPay: false,                               // 各自付
+    splitMode: 'equal',                           // 怎麼分：equal 平均／custom 自訂金額
+    customText: {},                               // 自訂金額的輸入文字
+    repay: {}                                     // 當場已還：{ 成員id: { checked, method, methodOther } }
   };
   document.getElementById('f-amount').value = '';
   document.getElementById('f-title').value = '';
@@ -1111,12 +1124,7 @@ function openAddForm() {
   draft.removedPhotoIds = [];   // 編輯時被刪掉的舊照片
   renderPhotos();
   draft.method = localStorage.getItem(METHOD_KEY) || null;
-  draft.settledBefore = [];   // 編輯前，這筆支出已經還款的人
-  draft.repayMethod = localStorage.getItem(REPAY_METHOD_KEY) || null;
-  document.getElementById('f-repay-other').value = localStorage.getItem(REPAY_OTHER_KEY) || '';
-  renderFormRepay();
-  document.getElementById('f-settled').checked = false;
-  document.getElementById('f-settled-hint').textContent = '其他人已經把自己那份還給付款人，結算時不會再出現這筆欠款';
+  document.getElementById('f-more').open = false;
   document.getElementById('f-method-other').value = localStorage.getItem(METHOD_OTHER_KEY) || '';
   document.getElementById('save-btn').textContent = '儲存支出';
   document.getElementById('delete-btn').style.display = 'none';
@@ -1134,10 +1142,13 @@ function openEditForm(id) {
     category: e.category,
     payerId: e.payerId || (myMember() || trip.members[0]).id,
     participants: Object.keys(e.shares),
-    splitType: e.splitType,
-    customText: {}
+    selfPay: e.splitType === 'self',
+    // 舊資料的各付各的沒有 splitMode，都是自訂金額
+    splitMode: e.splitType === 'self' ? (e.splitMode || 'custom') : e.splitType,
+    customText: {},
+    repay: {}
   };
-  if (e.splitType !== 'equal') {   // 自訂金額、各付各的都有每人金額
+  if (draft.splitMode === 'custom') {
     for (const [mid, v] of Object.entries(e.shares)) draft.customText[mid] = toText(v);
   }
   document.getElementById('f-amount').value = toText(e.amount);
@@ -1149,17 +1160,11 @@ function openEditForm(id) {
   draft.removedPhotoIds = [];
   loadPhotos(e);
   draft.method = e.paymentMethod || null;
-  const debtors = expenseDebts(e).map(d => d.fromId);
-  const linked = transfers.filter(t => t.expenseId === e.id);
-  draft.settledBefore = linked.map(t => t.fromId);
-  draft.repayMethod = linked.length ? (linked[0].method || null) : (localStorage.getItem(REPAY_METHOD_KEY) || null);
-  document.getElementById('f-repay-other').value = linked.length ? (linked[0].methodOther || '') : (localStorage.getItem(REPAY_OTHER_KEY) || '');
-  const allPaid = debtors.length > 0 && debtors.every(id => draft.settledBefore.includes(id));
-  document.getElementById('f-settled').checked = allPaid;
-  document.getElementById('f-settled-hint').textContent = (!allPaid && draft.settledBefore.length)
-    ? `目前已還：${draft.settledBefore.map(memberName).join('、')}。勾選代表全部的人都還了`
-    : '其他人已經把自己那份還給付款人，結算時不會再出現這筆欠款';
-  renderFormRepay();
+  // 已經還過錢的人（包括在結算頁按「已還」的）自動勾好
+  transfers.filter(t => t.expenseId === e.id).forEach(t => {
+    draft.repay[t.fromId] = { checked: true, method: t.method || null, methodOther: t.methodOther || '' };
+  });
+  document.getElementById('f-more').open = !!(e.note || (e.photoIds || []).length);
   document.getElementById('f-method-other').value = e.paymentMethodOther || '';
   document.getElementById('save-btn').textContent = '儲存修改';
   document.getElementById('delete-btn').style.display = 'block';
@@ -1180,23 +1185,17 @@ function buildForm() {
   document.getElementById('f-method-other').style.display = draft.method === 'other' ? 'block' : 'none';
 
   document.getElementById('f-payer').innerHTML = trip.members.map(m =>
-    `<button class="pick ${m.id === draft.payerId ? 'on' : ''}" onclick="draft.payerId='${m.id}';buildForm()">${escapeHTML(m.name)}</button>`).join('');
+    `<button class="pick ${!draft.selfPay && m.id === draft.payerId ? 'on' : ''}" onclick="setPayer('${m.id}')">${escapeHTML(m.name)}</button>`).join('') +
+    `<button class="pick ${draft.selfPay ? 'on' : ''}" onclick="setPayer(null)">👥 各自付</button>`;
 
   document.getElementById('f-participants').innerHTML = trip.members.map(m =>
     `<button class="pick ${draft.participants.includes(m.id) ? 'on' : ''}" onclick="toggleParticipant('${m.id}')">${escapeHTML(m.name)}</button>`).join('');
 
-  const t = draft.splitType;
-  document.getElementById('seg-equal').classList.toggle('on', t === 'equal');
-  document.getElementById('seg-custom').classList.toggle('on', t === 'custom');
-  document.getElementById('seg-self').classList.toggle('on', t === 'self');
-  document.getElementById('split-hint').textContent = {
-    equal: '一個人先付，大家平分',
-    custom: '一個人先付，每個人的金額不一樣（例如各點各的菜）',
-    self: '每個人自己付自己的，只記錄花費，不會產生欠款'
-  }[t];
-  document.getElementById('payer-box').style.display = t === 'self' ? 'none' : 'block';
-  document.getElementById('participants-label').textContent = t === 'self' ? '有誰參加' : '誰要分攤';
-  renderFormRepay();
+  document.getElementById('seg-equal').classList.toggle('on', draft.splitMode === 'equal');
+  document.getElementById('seg-custom').classList.toggle('on', draft.splitMode === 'custom');
+  document.getElementById('split-hint').textContent = draft.selfPay ? '每個人自己付自己那份，不會產生欠款' : '';
+  document.getElementById('participants-label').textContent = draft.selfPay ? '有誰參加' : '誰要分';
+  document.getElementById('repay-sec').style.display = draft.selfPay ? 'none' : 'block';
   updateForm();
 }
 
@@ -1217,8 +1216,15 @@ function toggleParticipant(id) {
   buildForm();
 }
 
-function setSplitType(t) {
-  draft.splitType = t;
+function setSplitMode(m) {
+  draft.splitMode = m;
+  buildForm();
+}
+
+// 選付款人；null = 各自付
+function setPayer(id) {
+  if (id) { draft.selfPay = false; draft.payerId = id; }
+  else draft.selfPay = true;
   buildForm();
 }
 
@@ -1233,6 +1239,7 @@ function updateForm() {
   const base = trip.baseCurrency;
   const amount = parseAmount(document.getElementById('f-amount').value || '0', cur);
 
+  renderFormRepay();
   // 分攤明細
   const box = document.getElementById('split-detail');
   const ids = draft.participants;
@@ -1240,13 +1247,13 @@ function updateForm() {
     box.innerHTML = '<div class="hint">請至少選一個分攤的人</div>';
     return;
   }
-  if (draft.splitType === 'equal') {
+  if (draft.splitMode === 'equal') {
     if (!amount) { box.innerHTML = ''; return; }
     const parts = allocate(amount, ids.map(() => 1));
     box.innerHTML = '<div class="hint">' + ids.map((id, i) =>
       `${escapeHTML(memberName(id))} ${formatAmount(parts[i], cur)}`).join('、') + '</div>';
   } else {
-    // 各付各的：每人一個輸入框。只重建一次，避免打字時輸入框跳掉
+    // 自訂金額：每人一個輸入框。只重建一次，避免打字時輸入框跳掉
     const existing = [...box.querySelectorAll('input[data-mid]')].map(i => i.dataset.mid).join();
     if (existing !== ids.join()) {
       box.innerHTML = ids.map(id =>
@@ -1260,8 +1267,9 @@ function updateForm() {
   }
 }
 
-// 各付各的模式：顯示還差多少才等於總額
+// 自訂金額：顯示還差多少才等於總額
 function updateRemain() {
+  renderFormRepay();   // 「還」那一段的金額跟著更新
   const el = document.getElementById('remain');
   if (!el) return;
   const cur = draft.currency;
@@ -1296,7 +1304,7 @@ function saveExpense() {
 
   // 算出每人分攤的原幣金額
   let parts;
-  if (draft.splitType === 'equal') {
+  if (draft.splitMode === 'equal') {
     parts = allocate(amount, ids.map(() => 1));
   } else {
     parts = ids.map(id => parseAmount(draft.customText[id] || '0', cur));
@@ -1325,10 +1333,11 @@ function saveExpense() {
     photoIds: draft.photos.map(p => p.id),
     currency: cur, amount,
     rate: null, baseAmount: null, baseShares: null,   // 舊版的換算欄位，不再使用
-    payerId: draft.splitType === 'self' ? null : draft.payerId,
+    payerId: draft.selfPay ? null : draft.payerId,
     paymentMethod: draft.method,
     paymentMethodOther: draft.method === 'other' ? document.getElementById('f-method-other').value.trim() : '',
-    splitType: draft.splitType,
+    splitType: draft.selfPay ? 'self' : draft.splitMode,   // equal / custom / self（各自付）
+    splitMode: draft.splitMode,                              // 各自付時用平均還是自訂金額
     shares,
     v: 2,   // 資料格式版本：金額統一存到小數點後兩位
     updatedAt: now
@@ -1343,10 +1352,7 @@ function saveExpense() {
   }
 
   // 同步這筆支出的逐筆還款紀錄
-  const repayOther = draft.repayMethod === 'other' ? document.getElementById('f-repay-other').value.trim() : '';
-  syncExpenseRepayments({ id: expId, ...data }, document.getElementById('f-settled').checked, draft.settledBefore,
-    draft.repayMethod, repayOther);
-  if (document.getElementById('f-settled').checked) rememberRepayMethod(draft.repayMethod, repayOther);
+  syncExpenseRepayments({ id: expId, ...data }, draft.repay);
 
   // 記住這次的幣別（只存在這支手機）
   localStorage.setItem(LAST_CURRENCY_KEY, cur);
@@ -2063,7 +2069,7 @@ async function logout() {
    一直卡在「連線中」時，畫面上會顯示可能原因、錯誤訊息和版本，
    截圖給別人看就能判斷問題出在哪裡。
    ========================================================= */
-const APP_VERSION = '2026-09-25 修正邀請與登入';   // 每次改版更新，用來確認上傳的是不是最新檔案
+const APP_VERSION = '2026-09-25 表單付分還';   // 每次改版更新，用來確認上傳的是不是最新檔案
 let authResolved = false;
 const diagErrors = [];
 
@@ -2168,23 +2174,25 @@ function writeRepayment(expenseId, d, method = null, methodOther = '', paid = nu
   }).catch(onWriteError);
 }
 
-// 儲存支出後呼叫：金額、付款人可能改了，所以先刪掉舊的，再依最新金額重建
-function syncExpenseRepayments(e, allChecked, paidBefore, method, methodOther) {
+// 儲存支出後呼叫：金額、付款人可能改了，所以先刪掉這筆支出舊的還款紀錄，
+// 再依「當場已經還錢的人」和最新金額重建
+function syncExpenseRepayments(e, repayState) {
   const debts = expenseDebts(e);
   const old = transfers.filter(t => t.expenseId === e.id);
-  let keep;
-  if (allChecked) keep = debts.map(d => d.fromId);                     // 勾選：全部都還了
-  else if (debts.length && debts.every(d => paidBefore.includes(d.fromId))) keep = [];   // 原本全還，現在取消勾選
-  else keep = paidBefore;                                               // 沒動：保留原本部分還款的人
   old.forEach(t => tripRef().collection('transfers').doc(t.id).delete().catch(onWriteError));
-  debts.filter(d => keep.includes(d.fromId)).forEach(d => {
+  let last = null;
+  debts.forEach(d => {
+    const st = repayState[d.fromId];
+    if (!st || !st.checked) return;
     const prev = old.find(t => t.fromId === d.fromId) || {};
     // 原本用其他貨幣還的，照原本的匯率重算實付金額（幣別改了就不沿用）
     const paid = (prev.paidCurrency && prev.paidRate && prev.currency === d.currency)
       ? { currency: prev.paidCurrency, rate: prev.paidRate, amount: Math.round(d.amount * prev.paidRate) } : null;
-    if (allChecked) writeRepayment(e.id, d, method, methodOther, paid);               // 勾選時：用表單選的還款方式
-    else writeRepayment(e.id, d, prev.method || null, prev.methodOther || '', paid);   // 部分還款：保留原本的方式
+    const other = st.method === 'other' ? (st.methodOther || '').trim() : '';
+    writeRepayment(e.id, d, st.method || null, other, paid);
+    if (st.method && st.method !== 'offset') last = [st.method, other];
   });
+  if (last) rememberRepayMethod(last[0], last[1]);
 }
 
 /* ---------- 逐項：已還 ---------- */
@@ -2387,77 +2395,67 @@ function confirmRepaySheet() {
   fn(method, other, paid);
 }
 
-/* ---------- 新增支出表單：勾「當場已結清」時選還款方式 ---------- */
+/* ---------- 新增支出表單：「還」這一段 ----------
+   列出除了付款人以外、要分攤的每個人，勾選代表他當場已經還錢。
+   勾選後才出現還款方式，每個人可以不一樣。 */
+function formShares() {
+  const cur = draft.currency;
+  const amount = parseAmount(document.getElementById('f-amount').value || '0', cur) || 0;
+  const ids = draft.participants;
+  const out = {};
+  if (draft.splitMode === 'equal') {
+    const parts = allocate(amount, ids.map(() => 1));
+    ids.forEach((id, i) => { out[id] = parts[i]; });
+  } else {
+    ids.forEach(id => { out[id] = parseAmount(draft.customText[id] || '0', cur); });
+  }
+  return out;
+}
+
 function renderFormRepay() {
   if (!draft) return;
-  const on = document.getElementById('f-settled').checked;
-  document.getElementById('f-repay-box').style.display = on ? 'block' : 'none';
-  document.getElementById('f-repay-methods').innerHTML = methodChips(draft.repayMethod, 'pickFormRepay');
-  document.getElementById('f-repay-other').style.display = draft.repayMethod === 'other' ? 'block' : 'none';
+  const box = document.getElementById('f-repay-list');
+  if (draft.selfPay) { box.innerHTML = ''; return; }
+  const shares = formShares();
+  const debtors = draft.participants.filter(id => id !== draft.payerId);
+  if (!debtors.length) {
+    box.innerHTML = '<p class="hint" style="margin-top:0">沒有人需要還錢（只有付款人自己分攤）</p>';
+    return;
+  }
+  const payerName = escapeHTML(memberName(draft.payerId));
+  box.innerHTML = debtors.map(id => {
+    const st = draft.repay[id] || {};
+    const amt = shares[id] ? formatAmount(shares[id], draft.currency) : '—';
+    let extra = '';
+    if (st.checked) {
+      extra = `<div class="mini-chips">${REPAY_METHODS.map(m =>
+        `<button class="pick mini ${st.method === m.id ? 'on' : ''}" onclick="pickFormRepay('${id}','${m.id}')">${m.icon} ${m.name}</button>`).join('')}</div>`;
+      if (st.method === 'other') {
+        extra += `<input class="repay-other" value="${escapeHTML(st.methodOther || '')}" placeholder="例如：LINE Pay、美金現金"
+          oninput="draft.repay['${id}'].methodOther = this.value">`;
+      }
+    }
+    return `<div class="repay-row">
+      <label class="check-row"><input type="checkbox" ${st.checked ? 'checked' : ''} onchange="toggleFormRepay('${id}', this.checked)">
+        <span>${escapeHTML(memberName(id))} 還 ${payerName} ${amt}</span></label>
+      ${extra}
+    </div>`;
+  }).join('');
 }
-function pickFormRepay(id) {
-  draft.repayMethod = draft.repayMethod === id ? null : id;
+
+function toggleFormRepay(id, checked) {
+  if (!draft.repay[id]) {
+    // 第一次勾選：帶入這台裝置上次用的還款方式
+    draft.repay[id] = { method: localStorage.getItem(REPAY_METHOD_KEY) || null, methodOther: localStorage.getItem(REPAY_OTHER_KEY) || '' };
+  }
+  draft.repay[id].checked = checked;
   renderFormRepay();
 }
 
-
-/* =========================================================
-   統計
-   ---------------------------------------------------------
-   全部用已經記下的支出算，不需要另外輸入。各幣別分開，不互相換算。
-   ========================================================= */
-// 一組橫條：rows = [{ label, value }]，長度依最大值比例
-function barRows(rows, currency) {
-  const total = rows.reduce((a, r) => a + r.value, 0);
-  const max = Math.max(...rows.map(r => r.value), 1);
-  return rows.map(r => `<div class="stat-row">
-      <span>${r.label}</span>
-      <span class="bar"><span style="width:${Math.max(2, r.value / max * 100)}%"></span></span>
-      <span class="val">${formatAmount(r.value, currency)}<small>${total ? Math.round(r.value / total * 100) : 0}%</small></span>
-    </div>`).join('');
-}
-
-function renderStats() {
-  const box = document.getElementById('stats-box');
-  if (!trip) return;
-  if (!expenses.length) {
-    box.innerHTML = '<div class="empty"><strong>還沒有支出</strong>記幾筆帳之後，這裡會顯示花費統計</div>';
-    return;
-  }
-  let html = '';
-  for (const c of tripCurrencies()) {
-    const list = expenses.filter(e => e.currency === c);
-    const total = list.reduce((a, e) => a + e.amount, 0);
-
-    // 分類
-    const byCat = CATEGORIES.map(cat => ({
-      label: `${cat.icon} ${cat.name}`,
-      value: list.filter(e => (e.category || 'other') === cat.id).reduce((a, e) => a + e.amount, 0)
-    })).filter(r => r.value).sort((a, b) => b.value - a.value);
-
-    // 每日（依日期排序）
-    const days = {};
-    list.forEach(e => { days[e.date] = (days[e.date] || 0) + e.amount; });
-    const byDay = Object.keys(days).sort().map(d => {
-      const [, m, dd] = d.split('-');
-      return { label: `${Number(m)}/${Number(dd)}`, value: days[d] };
-    });
-
-    // 付款方式
-    const byMethod = [...PAY_METHODS.map(m => ({ id: m.id, label: `${m.icon} ${m.name}` })), { id: null, label: '未填' }]
-      .map(m => ({ label: m.label, value: list.filter(e => (e.paymentMethod || null) === m.id).reduce((a, e) => a + e.amount, 0) }))
-      .filter(r => r.value);
-
-    html += `<div class="card">
-      <div class="block-head"><h2>${CURRENCIES[c].name} ${c}</h2><span>總花費 <b>${formatAmount(total, c)}</b></span></div>
-      ${section('cat-' + c, '分類', '', barRows(byCat, c), true)}
-      ${section('day-' + c, '每日', `${byDay.length} 天`, barRows(byDay, c), true)}
-      ${section('pm-' + c, '付款方式', '', barRows(byMethod, c) +
-        (byMethod.some(r => r.label.includes('信用卡')) ? '<p class="hint">收到信用卡帳單時，可以用刷卡總額核對</p>' : ''), false)}
-    </div>`;
-  }
-  html += `<div class="card"><h2>每人花費</h2>${renderSpending()}</div>`;
-  box.innerHTML = html;
+function pickFormRepay(id, method) {
+  const st = draft.repay[id];
+  st.method = st.method === method ? null : method;   // 再點一次 = 取消
+  renderFormRepay();
 }
 
 /* ---------- 啟動（永遠放在 script 最後面，所有變數和函式都定義好之後才執行） ---------- */

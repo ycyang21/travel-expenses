@@ -326,6 +326,7 @@
   .ex-rate { margin-top: 10px; font-size: 15px; color: var(--stamp); font-weight: 600; min-height: 22px; }
   textarea.tall { min-height: 200px; }
   .summary-line { font-size: 14px; color: var(--muted); margin: 0 4px 10px; }
+  .map-link { display: inline-block; margin-top: 6px; font-size: 14px; color: var(--stamp); }
 </style>
 </head>
 <body>
@@ -505,7 +506,10 @@
       </div>
 
       <details class="more" id="f-more">
-        <summary>＋ 備註、照片</summary>
+        <summary>＋ 地點、備註、照片</summary>
+        <label for="f-place">地點</label>
+        <input id="f-place" placeholder="店名、地址，或貼上 Google 地圖連結" oninput="updatePlaceLink()">
+        <a class="map-link" id="f-place-link" target="_blank" rel="noopener" style="display:none">📍 在 Google 地圖開啟</a>
         <label for="f-note">備註</label>
         <textarea id="f-note" placeholder="想補充的事，例如：含小費 18%"></textarea>
         <label>照片（收據、菜單等，最多 4 張）</label>
@@ -763,7 +767,7 @@ function goHome(opts = {}) {
 
 function formHasInput() {
   return !!(document.getElementById('f-amount').value || document.getElementById('f-title').value ||
-            document.getElementById('f-note').value || (draft && draft.photos && draft.photos.some(p => p.isNew)));
+            document.getElementById('f-note').value || document.getElementById('f-place').value || (draft && draft.photos && draft.photos.some(p => p.isNew)));
 }
 
 // 手機的上一頁：有面板開著就先關面板，否則回首頁
@@ -1215,6 +1219,8 @@ function openAddForm() {
   document.getElementById('f-date').value = todayStr();
   document.getElementById('form-title').textContent = '新增支出';
   document.getElementById('f-note').value = '';
+  document.getElementById('f-place').value = '';
+  updatePlaceLink();
   draft.photos = [];            // [{ id, data, isNew }]
   draft.removedPhotoIds = [];   // 編輯時被刪掉的舊照片
   renderPhotos();
@@ -1253,6 +1259,8 @@ function openEditForm(id) {
   document.getElementById('f-date').value = e.date;
   document.getElementById('form-title').textContent = '編輯支出';
   document.getElementById('f-note').value = e.note || '';
+  document.getElementById('f-place').value = e.place || '';
+  updatePlaceLink();
   draft.photos = [];
   draft.removedPhotoIds = [];
   loadPhotos(e);
@@ -1261,7 +1269,7 @@ function openEditForm(id) {
   transfers.filter(t => t.expenseId === e.id).forEach(t => {
     draft.repay[t.fromId] = { checked: true, method: t.method || null, methodOther: t.methodOther || '' };
   });
-  document.getElementById('f-more').open = !!(e.note || (e.photoIds || []).length);
+  document.getElementById('f-more').open = !!(e.note || e.place || (e.photoIds || []).length);
   document.getElementById('f-method-other').value = e.paymentMethodOther || '';
   document.getElementById('save-btn').textContent = '儲存修改';
   document.getElementById('delete-btn').style.display = 'block';
@@ -1446,6 +1454,7 @@ function saveExpense() {
   const data = {
     title, category: draft.category, date,
     note: document.getElementById('f-note').value.trim(),
+    place: document.getElementById('f-place').value.trim(),
     photoIds: draft.photos.map(p => p.id),
     currency: cur, amount,
     rate: null, baseAmount: null, baseShares: null,   // 舊版的換算欄位，不再使用
@@ -1538,7 +1547,7 @@ function renderList() {
       return `<button class="exp" onclick="openEditForm('${e.id}')">
         <span class="icon">${cat.icon}</span>
         <span class="mid"><div class="title">${escapeHTML(e.title)}</div>
-          <div class="who">${isPersonal(e) ? `${escapeHTML(memberName(personalOwner(e)))} 個人${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}` : e.splitType === 'self' ? `各付各的${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}・${n} 人` : `${escapeHTML(memberName(e.payerId))} 付款${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}・${n} 人分攤`}${isFullySettled(e) ? '・<span class="settled-tag">✓已結清</span>' : ''}${e.note ? '・📝' : ''}${(e.photoIds || []).length ? `・📷${e.photoIds.length}` : ''}</div></span>
+          <div class="who">${isPersonal(e) ? `${escapeHTML(memberName(personalOwner(e)))} 個人${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}` : e.splitType === 'self' ? `各付各的${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}・${n} 人` : `${escapeHTML(memberName(e.payerId))} 付款${methodLabel(e) ? `（${escapeHTML(methodLabel(e))}）` : ''}・${n} 人分攤`}${isFullySettled(e) ? '・<span class="settled-tag">✓已結清</span>' : ''}${e.place ? '・📍' : ''}${e.note ? '・📝' : ''}${(e.photoIds || []).length ? `・📷${e.photoIds.length}` : ''}</div></span>
         <span class="money">${formatAmount(e.amount, e.currency)}</span>
       </button>`;
     }).join('');
@@ -2212,7 +2221,7 @@ async function logout() {
    一直卡在「連線中」時，畫面上會顯示可能原因、錯誤訊息和版本，
    截圖給別人看就能判斷問題出在哪裡。
    ========================================================= */
-const APP_VERSION = '2026-09-25 還款帶入換匯匯率';   // 每次改版更新，用來確認上傳的是不是最新檔案
+const APP_VERSION = '2026-09-29 地點欄位';   // 每次改版更新，用來確認上傳的是不是最新檔案
 let authResolved = false;
 const diagErrors = [];
 
@@ -2879,6 +2888,24 @@ function useExchangeRate(rate, memberId) {
   document.getElementById('repay-rate').value = rate;
   onRepayRateInput();
   document.getElementById('repay-rate-src').textContent = `用 ${memberName(memberId)} 換匯時的匯率`;
+}
+
+
+/* ---------- 地點 → Google 地圖連結 ----------
+   貼上的是網址：直接用那個網址（最精準）。
+   輸入店名或地址：產生 Google 地圖搜尋連結，點開會在地圖上搜尋這個名稱。
+   不需要 Google API 金鑰，也不用綁信用卡。 */
+function placeUrl(text) {
+  const t = (text || '').trim();
+  if (!t) return '';
+  if (/^https?:\/\//i.test(t)) return t;
+  return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(t);
+}
+function updatePlaceLink() {
+  const a = document.getElementById('f-place-link');
+  const url = placeUrl(document.getElementById('f-place').value);
+  a.style.display = url ? 'inline-block' : 'none';
+  if (url) a.href = url;
 }
 
 /* ---------- 啟動（永遠放在 script 最後面，所有變數和函式都定義好之後才執行） ---------- */

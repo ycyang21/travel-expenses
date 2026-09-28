@@ -508,8 +508,8 @@
       <details class="more" id="f-more">
         <summary>＋ 地點、備註、照片</summary>
         <label for="f-place">地點</label>
-        <input id="f-place" placeholder="店名、地址，或貼上 Google 地圖連結" oninput="updatePlaceLink()">
-        <a class="map-link" id="f-place-link" target="_blank" rel="noopener" style="display:none">📍 在 Google 地圖開啟</a>
+        <input id="f-place" placeholder="例如：貼上 Google 地圖連結" oninput="updatePlaceLink()">
+        <a class="map-link" id="f-place-link" target="_blank" rel="noopener" style="display:none">📍 開啟連結</a>
         <label for="f-note">備註</label>
         <textarea id="f-note" placeholder="想補充的事，例如：含小費 18%"></textarea>
         <label>照片（收據、菜單等，最多 4 張）</label>
@@ -2221,7 +2221,7 @@ async function logout() {
    一直卡在「連線中」時，畫面上會顯示可能原因、錯誤訊息和版本，
    截圖給別人看就能判斷問題出在哪裡。
    ========================================================= */
-const APP_VERSION = '2026-09-29 地點欄位';   // 每次改版更新，用來確認上傳的是不是最新檔案
+const APP_VERSION = '2026-09-29 地點改為一般輸入';   // 每次改版更新，用來確認上傳的是不是最新檔案
 let authResolved = false;
 const diagErrors = [];
 
@@ -2891,15 +2891,11 @@ function useExchangeRate(rate, memberId) {
 }
 
 
-/* ---------- 地點 → Google 地圖連結 ----------
-   貼上的是網址：直接用那個網址（最精準）。
-   輸入店名或地址：產生 Google 地圖搜尋連結，點開會在地圖上搜尋這個名稱。
-   不需要 Google API 金鑰，也不用綁信用卡。 */
+/* ---------- 地點：一般輸入框 ----------
+   只有貼上的是網址時，下方才出現「開啟連結」，方便之後點開查看。 */
 function placeUrl(text) {
   const t = (text || '').trim();
-  if (!t) return '';
-  if (/^https?:\/\//i.test(t)) return t;
-  return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(t);
+  return /^https?:\/\/\S+$/i.test(t) ? t : '';
 }
 function updatePlaceLink() {
   const a = document.getElementById('f-place-link');

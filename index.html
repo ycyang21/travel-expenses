@@ -327,6 +327,18 @@
   textarea.tall { min-height: 200px; }
   .summary-line { font-size: 14px; color: var(--muted); margin: 0 4px 10px; }
   .map-link { display: inline-block; margin-top: 6px; font-size: 14px; color: var(--stamp); }
+
+  /* ===== 按明細（免稅／不免稅） ===== */
+  .item-person { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .item-person:first-child { border-top: 0; padding-top: 0; }
+  .item-person .name { font-weight: 600; margin-bottom: 4px; }
+  .item-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .item-cols small { display: block; font-size: 13px; color: var(--muted); margin-bottom: 2px; }
+  .item-sum { margin-top: 14px; padding: 12px; border-radius: 10px; background: var(--paper); font-size: 15px; }
+  .item-sum .line { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; }
+  .item-sum .line small { display: block; color: var(--muted); font-size: 13px; }
+  .item-sum .line b { white-space: nowrap; }
+  .item-sum .total { border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 6px; }
 </style>
 </head>
 <body>
@@ -493,6 +505,7 @@
       <div class="seg" style="margin-top:0">
         <button id="seg-equal" onclick="setSplitMode('equal')">平均</button>
         <button id="seg-custom" onclick="setSplitMode('custom')">自訂金額</button>
+        <button id="seg-itemized" onclick="setSplitMode('itemized')">按明細</button>
       </div>
       <div class="hint" id="split-hint"></div>
       <div id="split-detail"></div>
@@ -1210,8 +1223,9 @@ function openAddForm() {
     participants: trip.members.map(m => m.id),   // 預設全員分攤
     personal: false,                              // 個人開銷
     selfPay: false,                               // 各自付
-    splitMode: 'equal',                           // 怎麼分：equal 平均／custom 自訂金額
+    splitMode: 'equal',                           // 怎麼分：equal 平均／custom 自訂金額／itemized 按明細
     customText: {},                               // 自訂金額的輸入文字
+    itemText: {},                                 // 按明細：{ 成員id: { free: 免稅商品, normal: 不免稅商品 } }
     repay: {}                                     // 當場已還：{ 成員id: { checked, method, methodOther } }
   };
   document.getElementById('f-amount').value = '';
@@ -1229,6 +1243,7 @@ function openAddForm() {
   document.getElementById('f-method-other').value = localStorage.getItem(METHOD_OTHER_KEY) || '';
   document.getElementById('save-btn').textContent = '儲存支出';
   document.getElementById('delete-btn').style.display = 'none';
+  resetSplitDetail();
   buildForm();
   showPage('page-add');
 }
@@ -1249,10 +1264,16 @@ function openEditForm(id) {
     // 舊資料的各付各的沒有 splitMode，都是自訂金額
     splitMode: e.splitType === 'self' ? (e.splitMode || 'custom') : e.splitType,
     customText: {},
+    itemText: {},
     repay: {}
   };
   if (draft.splitMode === 'custom') {
     for (const [mid, v] of Object.entries(e.shares)) draft.customText[mid] = toText(v);
+  }
+  if (draft.splitMode === 'itemized' && e.itemized) {
+    for (const [mid, v] of Object.entries(e.itemized)) {
+      draft.itemText[mid] = { free: v.free ? toText(v.free) : '', normal: v.normal ? toText(v.normal) : '' };
+    }
   }
   document.getElementById('f-amount').value = toText(e.amount);
   document.getElementById('f-title').value = e.title;
@@ -1273,6 +1294,7 @@ function openEditForm(id) {
   document.getElementById('f-method-other').value = e.paymentMethodOther || '';
   document.getElementById('save-btn').textContent = '儲存修改';
   document.getElementById('delete-btn').style.display = 'block';
+  resetSplitDetail();
   buildForm();
   showPage('page-add');
 }
@@ -1304,7 +1326,11 @@ function buildForm() {
 
   document.getElementById('seg-equal').classList.toggle('on', draft.splitMode === 'equal');
   document.getElementById('seg-custom').classList.toggle('on', draft.splitMode === 'custom');
-  document.getElementById('split-hint').textContent = draft.selfPay ? '每個人自己付自己那份，不會產生欠款' : '';
+  document.getElementById('seg-itemized').classList.toggle('on', draft.splitMode === 'itemized');
+  document.getElementById('split-hint').textContent = [
+    draft.selfPay ? '每個人自己付自己那份，不會產生欠款' : '',
+    draft.splitMode === 'itemized' ? '金額填實際付的錢；每個人填自己商品打折後的價格，免稅折抵會按免稅商品的比例分攤' : ''
+  ].filter(Boolean).join('。');
   document.getElementById('participants-label').textContent = draft.selfPay ? '有誰參加' : '誰要分';
   document.getElementById('repay-sec').style.display = (draft.selfPay || draft.personal) ? 'none' : 'block';
   updateForm();
@@ -1325,6 +1351,13 @@ function toggleParticipant(id) {
   // 保持跟成員名單相同的順序
   draft.participants.sort((a, b) => trip.members.findIndex(m => m.id === a) - trip.members.findIndex(m => m.id === b));
   buildForm();
+}
+
+// 開新表單時清掉上一筆的輸入框，避免看到上一筆的數字
+function resetSplitDetail() {
+  const box = document.getElementById('split-detail');
+  box.dataset.key = '';
+  box.innerHTML = '';
 }
 
 function setSplitMode(m) {
@@ -1361,18 +1394,38 @@ function updateForm() {
   const box = document.getElementById('split-detail');
   const ids = draft.participants;
   if (ids.length === 0) {
+    box.dataset.key = '';
     box.innerHTML = '<div class="hint">請至少選一個分攤的人</div>';
     return;
   }
   if (draft.splitMode === 'equal') {
+    box.dataset.key = '';
     if (!amount) { box.innerHTML = ''; return; }
     const parts = allocate(amount, ids.map(() => 1));
     box.innerHTML = '<div class="hint">' + ids.map((id, i) =>
       `${escapeHTML(memberName(id))} ${formatAmount(parts[i], cur)}`).join('、') + '</div>';
+  } else if (draft.splitMode === 'itemized') {
+    // 按明細：每人兩個輸入框。只在換人或換模式時重建，避免打字時輸入框跳掉
+    const key = 'itemized|' + ids.join();
+    if (box.dataset.key !== key) {
+      box.dataset.key = key;
+      const field = (id, col, label) => {
+        const t = (draft.itemText[id] || {})[col] || '';
+        return `<div><small>${label}</small><div class="calc-wrap">` +
+          `<input inputmode="decimal" data-mid="${id}" data-col="${col}" value="${escapeHTML(t)}" placeholder="0" ` +
+          `oninput="setItemText('${id}','${col}',this.value)">` +
+          `<button class="calc-btn" onclick="openCalc(this.previousElementSibling, 'item', '${id}', '${col}')" aria-label="開啟計算機">${CALC_ICON}</button></div></div>`;
+      };
+      box.innerHTML = ids.map(id => `<div class="item-person"><div class="name">${escapeHTML(memberName(id))}</div>
+          <div class="item-cols">${field(id, 'free', '免稅商品')}${field(id, 'normal', '不免稅商品')}</div></div>`).join('') +
+        '<div class="item-sum" id="item-sum"></div>';
+    }
+    updateItemized();
   } else {
     // 自訂金額：每人一個輸入框。只重建一次，避免打字時輸入框跳掉
     const existing = [...box.querySelectorAll('input[data-mid]')].map(i => i.dataset.mid).join();
-    if (existing !== ids.join()) {
+    if (box.dataset.key !== 'custom' || existing !== ids.join()) {
+      box.dataset.key = 'custom';
       box.innerHTML = ids.map(id =>
         `<div class="custom-row"><span>${escapeHTML(memberName(id))}</span>` +
         `<div class="calc-wrap"><input inputmode="decimal" data-mid="${id}" value="${draft.customText[id] || ''}" placeholder="0" ` +
@@ -1425,11 +1478,19 @@ function saveExpense() {
 
   // 算出每人分攤的原幣金額
   let parts;
+  let itemized = null;   // 按明細：每個人填的免稅／不免稅金額，編輯時要帶回來
   if (personal) {
     ids = [owner];
     parts = [amount];
   } else if (draft.splitMode === 'equal') {
     parts = allocate(amount, ids.map(() => 1));
+  } else if (draft.splitMode === 'itemized') {
+    const r = computeItemized(amount, cur, ids);
+    if (r.error) { alert(r.error); return; }
+    if (r.freeSum && r.discount / r.freeSum * 100 > ITEM_WARN_PCT &&
+        !confirm(`折抵 ${formatAmount(r.discount, cur)} 約是免稅商品的 ${(r.discount / r.freeSum * 100).toFixed(0)}%，比一般免稅高很多。確定金額沒有輸入錯？`)) return;
+    parts = ids.map(id => r.shares[id]);
+    itemized = r.itemized;
   } else {
     parts = ids.map(id => parseAmount(draft.customText[id] || '0', cur));
     if (parts.some(p => p === null)) { alert('有人的金額格式不對'); return; }
@@ -1463,6 +1524,7 @@ function saveExpense() {
     paymentMethodOther: draft.method === 'other' ? document.getElementById('f-method-other').value.trim() : '',
     splitType: personal ? 'personal' : (draft.selfPay ? 'self' : draft.splitMode),   // equal / custom / self（各自付）/ personal（個人開銷）
     splitMode: draft.splitMode,                              // 各自付時用平均還是自訂金額
+    itemized: personal ? null : itemized,
     shares,
     v: 2,   // 資料格式版本：金額統一存到小數點後兩位
     updatedAt: now
@@ -1793,12 +1855,14 @@ async function shareSettle() {
 let calc = null;   // { input, kind: 'amount'|'custom', memberId, expr }
 const CALC_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="5" y="3" width="14" height="18" rx="2"/><rect x="8" y="6" width="8" height="3" rx=".5"/><path d="M8.5 13h.01M12 13h.01M15.5 13h.01M8.5 16.5h.01M12 16.5h.01M15.5 16.5h.01"/></svg>`;
 
-function openCalc(input, kind, memberId) {
+function openCalc(input, kind, memberId, col) {
   if (!draft) return;
   input.blur();   // 避免手機跳出系統鍵盤
-  calc = { input, kind, memberId, expr: input.value.replace(/[^\d.]/g, '').replace(/\.$/, '') };
+  calc = { input, kind, memberId, col, expr: normalizeOps(input.value).replace(/[^\d.+−×÷]/g, '').replace(/\.$/, '') };
   document.getElementById('calc-label').textContent =
-    kind === 'amount' ? `總金額（${draft.currency}）` : `${memberName(memberId)} 要付（${draft.currency}）`;
+    kind === 'amount' ? `總金額（${draft.currency}）` :
+    kind === 'item' ? `${memberName(memberId)} 的${col === 'free' ? '免稅' : '不免稅'}商品（${draft.currency}）` :
+    `${memberName(memberId)} 要付（${draft.currency}）`;
   renderCalcQuick();
   renderCalc();
   document.getElementById('calc').classList.add('show');
@@ -1918,10 +1982,11 @@ function calcConfirm() {
     text = roundForCurrency(v, cur);
     text = text.replace(/\.0+$/, '');   // 12.00 顯示成 12
   }
-  const { input, kind, memberId } = calc;
+  const { input, kind, memberId, col } = calc;
   input.value = text;
   closeCalc();
   if (kind === 'amount') updateForm();
+  else if (kind === 'item') setItemText(memberId, col, text);
   else { draft.customText[memberId] = text; updateRemain(); }
 }
 
@@ -2221,7 +2286,7 @@ async function logout() {
    一直卡在「連線中」時，畫面上會顯示可能原因、錯誤訊息和版本，
    截圖給別人看就能判斷問題出在哪裡。
    ========================================================= */
-const APP_VERSION = '2026-09-29 地點改為一般輸入';   // 每次改版更新，用來確認上傳的是不是最新檔案
+const APP_VERSION = '2026-10-03 按明細分攤';   // 每次改版更新，用來確認上傳的是不是最新檔案
 let authResolved = false;
 const diagErrors = [];
 
@@ -2566,6 +2631,9 @@ function formShares() {
   if (draft.splitMode === 'equal') {
     const parts = allocate(amount, ids.map(() => 1));
     ids.forEach((id, i) => { out[id] = parts[i]; });
+  } else if (draft.splitMode === 'itemized') {
+    const r = computeItemized(amount, cur, ids);
+    ids.forEach(id => { out[id] = r.error ? null : r.shares[id]; });
   } else {
     ids.forEach(id => { out[id] = parseAmount(draft.customText[id] || '0', cur); });
   }
@@ -2902,6 +2970,110 @@ function updatePlaceLink() {
   const url = placeUrl(document.getElementById('f-place').value);
   a.style.display = url ? 'inline-block' : 'none';
   if (url) a.href = url;
+}
+
+
+/* =========================================================
+   按明細：免稅／不免稅商品，免稅折抵按比例分攤
+   ---------------------------------------------------------
+   輸入：實付金額、每個人的免稅商品小計、不免稅商品小計（都是打折後的價格）
+   1. 免稅折抵 ＝ 商品合計 − 實付
+   2. 免稅折抵按每個人「免稅商品」的比例分攤
+   3. 每人要付 ＝ 免稅商品 − 分到的折抵 ＋ 不免稅商品
+   加總一定剛好等於實付（allocate 會處理零頭）。
+   例：Julie 免稅 4,389、Amy 免稅 1,782，實付 5,610
+       → 折抵 561，Julie −399、Amy −162 → Julie 3,990、Amy 1,620
+   ========================================================= */
+
+// 把 - * / x 換成計算機用的符號
+function normalizeOps(t) {
+  return String(t).replace(/,/g, '').replace(/-/g, '−').replace(/[*xX]/g, '×').replace(/\//g, '÷');
+}
+
+// 輸入框可以直接打算式，例如 1980-198、1980*0.9；空白 = 0；格式錯誤回傳 null
+function parseItemText(text, cur) {
+  const t = normalizeOps(text || '').trim();
+  if (!t) return 0;
+  if (/[+−×÷]/.test(t)) {
+    const v = evalExpr(t);
+    if (v === null || v < 0) return null;
+    return parseAmount(roundForCurrency(v, cur), cur);
+  }
+  return parseAmount(t, cur);
+}
+
+function setItemText(id, col, value) {
+  draft.itemText[id] = draft.itemText[id] || { free: '', normal: '' };
+  draft.itemText[id][col] = value;
+  updateItemized();
+}
+
+const ITEM_WARN_PCT = 20;   // 折抵超過免稅商品的 20% 就提醒（日本免稅約 8–10%）
+
+function computeItemized(amount, cur, ids) {
+  const free = {}, normal = {};
+  for (const id of ids) {
+    const t = draft.itemText[id] || {};
+    free[id] = parseItemText(t.free, cur);
+    normal[id] = parseItemText(t.normal, cur);
+    if (free[id] === null || normal[id] === null) return { error: `${memberName(id)} 的金額格式不對` };
+  }
+  const freeSum = ids.reduce((a, id) => a + free[id], 0);
+  const normalSum = ids.reduce((a, id) => a + normal[id], 0);
+  const gross = freeSum + normalSum;
+  const base = { free, normal, freeSum, normalSum, gross };
+  if (!amount) return { ...base, error: '請先在最上面輸入實際付的金額' };
+  if (!gross) return { ...base, error: '請填每個人的商品金額' };
+  const discount = gross - amount;
+  if (discount < 0) return { ...base, discount, error: `實付比商品合計多 ${formatAmount(-discount, cur)}，請檢查金額` };
+  if (discount > freeSum) {
+    return { ...base, discount, error: freeSum
+      ? `折抵 ${formatAmount(discount, cur)} 比免稅商品還多，請檢查金額`
+      : `實付比商品合計少 ${formatAmount(discount, cur)}，但沒有填免稅商品` };
+  }
+  // 台幣、日圓這類整數貨幣，輸入都是整數時，結果也分到整數（不會出現 ¥1,620.37）
+  const all = [amount, ...ids.map(id => free[id]), ...ids.map(id => normal[id])];
+  const unit = (CURRENCIES[cur].showCents === 'auto' && all.every(v => v % 100 === 0)) ? 100 : 1;
+  const freeAfter = allocate((freeSum - discount) / unit, ids.map(id => free[id])).map(v => v * unit);
+  const shares = {}, cut = {}, itemized = {};
+  ids.forEach((id, i) => {
+    cut[id] = free[id] - freeAfter[i];
+    shares[id] = freeAfter[i] + normal[id];
+    itemized[id] = { free: free[id], normal: normal[id] };
+  });
+  return { ...base, discount, shares, cut, itemized };
+}
+
+function updateItemized() {
+  renderFormRepay();   // 「還」那一段的金額跟著更新
+  const el = document.getElementById('item-sum');
+  if (!el || !draft) return;
+  const cur = draft.currency;
+  const amount = parseAmount(document.getElementById('f-amount').value || '0', cur) || 0;
+  const ids = draft.participants;
+  const r = computeItemized(amount, cur, ids);
+  const f = v => formatAmount(v, cur);
+  if (r.error) {
+    el.innerHTML = (r.gross ? `<div class="line total"><span>商品合計</span><b>${f(r.gross)}</b></div>` : '') +
+      `<div class="remain bad" style="margin:0">${escapeHTML(r.error)}</div>`;
+    return;
+  }
+  let html = `<div class="line total"><span>商品合計 ${f(r.gross)} → 實付</span><b>${f(amount)}</b></div>`;
+  const pct = r.freeSum ? r.discount / r.freeSum * 100 : 0;
+  html += r.discount
+    ? `<div class="line"><span>免稅折抵（按免稅商品比例分攤）<small>約免稅商品的 ${pct.toFixed(1)}%</small></span><b>−${f(r.discount)}</b></div>`
+    : '<div class="line"><span>沒有免稅折抵（實付 ＝ 商品合計）</span></div>';
+  html += ids.map(id => {
+    const parts = [];
+    if (r.free[id]) parts.push(`免稅 ${f(r.free[id])}${r.cut[id] ? ` −${f(r.cut[id])}` : ''}`);
+    if (r.normal[id]) parts.push(`不免稅 ${f(r.normal[id])}`);
+    return `<div class="line"><span>${escapeHTML(memberName(id))}<small>${parts.join(' ＋ ') || '沒有商品'}</small></span><b>${f(r.shares[id])}</b></div>`;
+  }).join('');
+  html += '<div class="remain ok" style="margin-top:6px">✓ 加起來剛好等於實付</div>';
+  if (pct > ITEM_WARN_PCT) {
+    html += `<div class="remain bad" style="margin-top:4px">折抵比一般免稅（約 10%）高很多，請確認實付和商品金額有沒有輸入錯</div>`;
+  }
+  el.innerHTML = html;
 }
 
 /* ---------- 啟動（永遠放在 script 最後面，所有變數和函式都定義好之後才執行） ---------- */

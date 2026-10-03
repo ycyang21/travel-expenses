@@ -570,6 +570,18 @@
         <button class="small-btn" onclick="addMemberLater()">加入</button>
       </div>
     </div>
+    <div class="card">
+      <h2>匯出 Excel</h2>
+      <p class="hint" style="margin-top:0">把這趟旅程的支出、結算、還款紀錄、每人花費、換匯、筆記整理成一個 Excel 檔，地點和備註也會一起匯出。</p>
+      <label class="check-row"><input type="checkbox" id="export-photos" checked>
+        <span>包含照片<small id="export-photo-hint"></small></span></label>
+      <button class="btn" id="export-btn" onclick="exportExcel()">匯出 Excel</button>
+      <div class="hint" id="export-status"></div>
+      <div id="export-ready" style="display:none">
+        <button class="btn ghost" onclick="downloadExport()">下載檔案</button>
+        <button class="btn ghost" id="export-share" onclick="shareExport()">分享到其他 App（LINE、檔案、Email）</button>
+      </div>
+    </div>
     <button class="btn ghost" onclick="switchTrip()">切換／建立其他旅程</button>
     <button class="btn danger" id="delete-trip-btn" onclick="deleteTrip()">刪除這趟旅程</button>
     <p class="hint" style="text-align:center;margin-top:20px" id="app-version"></p>
@@ -748,6 +760,7 @@ function showPage(id, opts = {}) {
   document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('active', b.dataset.page === id));
   if (id === 'page-settle') renderSettle();
   if (id === 'page-stats') renderStats();
+  if (id === 'page-settings' && trip) renderExportCard();
   // 首頁以外的頁面都顯示「回首頁」
   const home = isHomePage(id);
   document.getElementById('back-btn').classList.toggle('show', !home);
@@ -2320,7 +2333,7 @@ async function logout() {
    一直卡在「連線中」時，畫面上會顯示可能原因、錯誤訊息和版本，
    截圖給別人看就能判斷問題出在哪裡。
    ========================================================= */
-const APP_VERSION = '2026-10-03 按明細：稅率可新增';   // 每次改版更新，用來確認上傳的是不是最新檔案
+const APP_VERSION = '2026-10-03 匯出 Excel';   // 每次改版更新，用來確認上傳的是不是最新檔案
 let authResolved = false;
 const diagErrors = [];
 
@@ -3211,6 +3224,510 @@ function updateItemized() {
   html += '<div class="remain ok" style="margin-top:6px">✓ 加起來剛好等於實付</div>';
   if (r.warning) html += `<div class="remain bad" style="margin-top:4px">${escapeHTML(r.warning)}</div>`;
   el.innerHTML = html;
+}
+
+/* =========================================================
+   匯出 Excel
+   ---------------------------------------------------------
+   不用外部套件，直接在手機上產生 .xlsx（沒網路也能匯出）。
+   .xlsx 其實是一個 ZIP 壓縮檔，裡面放幾個 XML 檔和照片：
+     [Content_Types].xml、_rels/.rels、xl/workbook.xml、xl/styles.xml、
+     xl/worksheets/sheetN.xml（每個工作表一個）、
+     xl/drawings/drawingN.xml＋xl/media/imageN.jpeg（照片）
+   ========================================================= */
+
+/* ---------- ZIP（不壓縮；照片本來就是壓縮過的 JPEG） ---------- */
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+// files：[{ name, data: Uint8Array }]
+function makeZip(files) {
+  const enc = new TextEncoder();
+  const parts = [], central = [];
+  let offset = 0;
+  for (const f of files) {
+    const name = enc.encode(f.name), data = f.data, crc = crc32(data);
+    const local = new Uint8Array(30 + name.length), lv = new DataView(local.buffer);
+    lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true); lv.setUint16(6, 0x0800, true);
+    lv.setUint16(8, 0, true); lv.setUint16(10, 0, true); lv.setUint16(12, 0x21, true);
+    lv.setUint32(14, crc, true); lv.setUint32(18, data.length, true); lv.setUint32(22, data.length, true);
+    lv.setUint16(26, name.length, true); lv.setUint16(28, 0, true); local.set(name, 30);
+    parts.push(local, data);
+    const cen = new Uint8Array(46 + name.length), cv = new DataView(cen.buffer);
+    cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true); cv.setUint16(8, 0x0800, true);
+    cv.setUint16(10, 0, true); cv.setUint16(12, 0, true); cv.setUint16(14, 0x21, true);
+    cv.setUint32(16, crc, true); cv.setUint32(20, data.length, true); cv.setUint32(24, data.length, true);
+    cv.setUint16(28, name.length, true); cv.setUint32(42, offset, true); cen.set(name, 46);
+    central.push(cen);
+    offset += local.length + data.length;
+  }
+  const cenSize = central.reduce((a, c) => a + c.length, 0);
+  const end = new Uint8Array(22), ev = new DataView(end.buffer);
+  ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, files.length, true); ev.setUint16(10, files.length, true);
+  ev.setUint32(12, cenSize, true); ev.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, end], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+/* ---------- 產生 .xlsx ----------
+   sheet：{ name, cols: [{ header, width }], rows: [[cell, …]], images: [{ row, col, bytes, w, h }], rowHeights: { 列號: 高度(pt) } }
+   cell：null／字串／數字／{ v: 數字, fmt: 'int'|'dec' }／{ text, link }／{ text, wrap: true } */
+const XLSX_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+const REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const PKG_REL_NS = 'http://schemas.openxmlformats.org/package/2006/relationships';
+const XML_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+
+function xmlEsc(s) {
+  return String(s)
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
+    .replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+function colName(i) {
+  let s = '';
+  for (let n = i + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s;
+  return s;
+}
+function safeSheetName(name, used) {
+  let n = String(name).replace(/[\[\]:*?\/\\]/g, ' ').slice(0, 31) || 'Sheet';
+  let base = n, i = 2;
+  while (used.has(n)) n = base.slice(0, 28) + ' ' + i++;
+  used.add(n);
+  return n;
+}
+
+// 樣式編號（對應 styles.xml 的 cellXfs）
+const XS = { normal: 0, header: 1, int: 2, dec: 3, wrap: 4, link: 5, top: 6, intTop: 7, decTop: 8 };
+const STYLES_XML = XML_HEAD + `<styleSheet xmlns="${XLSX_NS}">
+<fonts count="3"><font><sz val="11"/><name val="Calibri"/><family val="2"/></font><font><b/><sz val="11"/><name val="Calibri"/><family val="2"/></font><font><u/><sz val="11"/><color rgb="FF0563C1"/><name val="Calibri"/><family val="2"/></font></fonts>
+<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE8EEF6"/><bgColor indexed="64"/></patternFill></fill></fills>
+<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="9">
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
+<xf numFmtId="3" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="4" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top"/></xf>
+<xf numFmtId="3" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment vertical="top"/></xf>
+<xf numFmtId="4" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment vertical="top"/></xf>
+</cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`;
+
+function cellXml(ref, c, rowTop) {
+  if (c === null || c === undefined || c === '') return '';
+  const st = rowTop ? XS.top : XS.normal;
+  const I = rowTop ? XS.intTop : XS.int, Dd = rowTop ? XS.decTop : XS.dec;
+  if (typeof c === 'number') return `<c r="${ref}" s="${Number.isInteger(c) ? I : Dd}"><v>${c}</v></c>`;
+  if (typeof c === 'object' && 'v' in c) return `<c r="${ref}" s="${c.fmt === 'int' ? I : c.fmt === 'gen' ? st : Dd}"><v>${c.v}</v></c>`;
+  let text = c, s = st;
+  if (typeof c === 'object') { text = c.text; s = c.link ? XS.link : c.wrap ? XS.wrap : st; }
+  return `<c r="${ref}" t="inlineStr" s="${s}"><is><t xml:space="preserve">${xmlEsc(text)}</t></is></c>`;
+}
+
+// 多行文字（備註、按明細內容）：Excel 不會自動撐高，先估算需要幾行
+function textWidth(t) { let w = 0; for (const ch of t) w += ch.charCodeAt(0) > 0x2E80 ? 2 : 1; return w; }
+function wrapRowHeight(row, cols) {
+  let lines = 1;
+  row.forEach((c, i) => {
+    if (!c || typeof c !== 'object' || !c.wrap) return;
+    const width = Math.max(4, (cols[i].width || 12) - 1);
+    const n = String(c.text).split('\n').reduce((a, par) => a + Math.max(1, Math.ceil(textWidth(par) / width)), 0);
+    lines = Math.max(lines, n);
+  });
+  return lines > 1 ? Math.min(409, lines * 15 + 2) : 0;
+}
+
+function buildSheetXml(sheet, drawingRid) {
+  const nCols = sheet.cols.length;
+  const lastRow = sheet.rows.length + 1;
+  const lastRef = colName(nCols - 1) + lastRow;
+  const links = [];
+  let rowsXml = '<row r="1">' + sheet.cols.map((c, i) => cellXml(colName(i) + '1', { text: c.header })).join('').replace(/s="\d+"/g, `s="${XS.header}"`) + '</row>';
+  sheet.rows.forEach((row, ri) => {
+    const r = ri + 2;
+    const ht = (sheet.rowHeights && sheet.rowHeights[r]) || wrapRowHeight(row, sheet.cols);
+    rowsXml += `<row r="${r}"${ht ? ` ht="${ht}" customHeight="1"` : ''}>`;
+    row.forEach((c, ci) => {
+      const ref = colName(ci) + r;
+      if (c && typeof c === 'object' && c.link) links.push({ ref, url: c.link });
+      rowsXml += cellXml(ref, c, !!ht);
+    });
+    rowsXml += '</row>';
+  });
+  let xml = XML_HEAD + `<worksheet xmlns="${XLSX_NS}" xmlns:r="${REL_NS}">` +
+    `<dimension ref="A1:${lastRef}"/>` +
+    '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>' +
+    '<sheetFormatPr defaultRowHeight="15"/>' +
+    '<cols>' + sheet.cols.map((c, i) => `<col min="${i + 1}" max="${i + 1}" width="${c.width || 12}" customWidth="1"/>`).join('') + '</cols>' +
+    `<sheetData>${rowsXml}</sheetData>`;
+  if (sheet.rows.length) xml += `<autoFilter ref="A1:${lastRef}"/>`;
+  if (links.length) xml += '<hyperlinks>' + links.map((l, i) => `<hyperlink ref="${l.ref}" r:id="rIdL${i + 1}"/>`).join('') + '</hyperlinks>';
+  xml += '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>';
+  if (drawingRid) xml += `<drawing r:id="${drawingRid}"/>`;
+  xml += '</worksheet>';
+  return { xml, links };
+}
+
+function buildDrawingXml(images) {
+  const EMU = 9525;   // 1 像素 = 9525 EMU
+  return XML_HEAD + '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">' +
+    images.map((img, i) => `<xdr:oneCellAnchor>
+<xdr:from><xdr:col>${img.col}</xdr:col><xdr:colOff>${4 * EMU}</xdr:colOff><xdr:row>${img.row - 1}</xdr:row><xdr:rowOff>${4 * EMU}</xdr:rowOff></xdr:from>
+<xdr:ext cx="${img.w * EMU}" cy="${img.h * EMU}"/>
+<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${i + 2}" name="照片 ${i + 1}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr>
+<xdr:blipFill><a:blip xmlns:r="${REL_NS}" r:embed="rId${i + 1}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>
+<xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${img.w * EMU}" cy="${img.h * EMU}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>
+<xdr:clientData/></xdr:oneCellAnchor>`).join('') + '</xdr:wsDr>';
+}
+
+function buildXlsx(sheets) {
+  const enc = s => new TextEncoder().encode(s);
+  const files = [];
+  const used = new Set();
+  let imageNo = 0, drawingNo = 0;
+  const overrides = [
+    '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
+    '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>',
+    '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>',
+    '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+  ];
+  const names = [], defNames = [];
+  sheets.forEach((sheet, si) => {
+    const n = si + 1;
+    const name = safeSheetName(sheet.name, used);
+    names.push(name);
+    if (sheet.rows.length) {
+      defNames.push(`<definedName name="_xlnm._FilterDatabase" localSheetId="${si}" hidden="1">'${xmlEsc(name.replace(/'/g, "''"))}'!$A$1:$${colName(sheet.cols.length - 1)}$${sheet.rows.length + 1}</definedName>`);
+    }
+    const hasImages = sheet.images && sheet.images.length;
+    const { xml, links } = buildSheetXml(sheet, hasImages ? 'rIdD1' : null);
+    files.push({ name: `xl/worksheets/sheet${n}.xml`, data: enc(xml) });
+    overrides.push(`<Override PartName="/xl/worksheets/sheet${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`);
+    const rels = links.map((l, i) => `<Relationship Id="rIdL${i + 1}" Type="${REL_NS}/hyperlink" Target="${xmlEsc(l.url)}" TargetMode="External"/>`);
+    if (hasImages) {
+      drawingNo++;
+      rels.push(`<Relationship Id="rIdD1" Type="${REL_NS}/drawing" Target="../drawings/drawing${drawingNo}.xml"/>`);
+      files.push({ name: `xl/drawings/drawing${drawingNo}.xml`, data: enc(buildDrawingXml(sheet.images)) });
+      overrides.push(`<Override PartName="/xl/drawings/drawing${drawingNo}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`);
+      const dRels = sheet.images.map((img, i) => {
+        imageNo++;
+        files.push({ name: `xl/media/image${imageNo}.jpeg`, data: img.bytes });
+        return `<Relationship Id="rId${i + 1}" Type="${REL_NS}/image" Target="../media/image${imageNo}.jpeg"/>`;
+      });
+      files.push({ name: `xl/drawings/_rels/drawing${drawingNo}.xml.rels`, data: enc(XML_HEAD + `<Relationships xmlns="${PKG_REL_NS}">${dRels.join('')}</Relationships>`) });
+    }
+    if (rels.length) files.push({ name: `xl/worksheets/_rels/sheet${n}.xml.rels`, data: enc(XML_HEAD + `<Relationships xmlns="${PKG_REL_NS}">${rels.join('')}</Relationships>`) });
+  });
+
+  files.push({ name: 'xl/workbook.xml', data: enc(XML_HEAD + `<workbook xmlns="${XLSX_NS}" xmlns:r="${REL_NS}"><bookViews><workbookView/></bookViews><sheets>` +
+    names.map((nm, i) => `<sheet name="${xmlEsc(nm)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('') + '</sheets>' +
+    (defNames.length ? `<definedNames>${defNames.join('')}</definedNames>` : '') + '</workbook>') });
+  files.push({ name: 'xl/_rels/workbook.xml.rels', data: enc(XML_HEAD + `<Relationships xmlns="${PKG_REL_NS}">` +
+    names.map((_, i) => `<Relationship Id="rId${i + 1}" Type="${REL_NS}/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('') +
+    `<Relationship Id="rId${names.length + 1}" Type="${REL_NS}/styles" Target="styles.xml"/></Relationships>`) });
+  files.push({ name: 'xl/styles.xml', data: enc(STYLES_XML) });
+  const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  files.push({ name: 'docProps/core.xml', data: enc(XML_HEAD + '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' +
+    `<dc:title>${xmlEsc(trip.name)}</dc:title><dc:creator>旅途分帳</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`) });
+  files.push({ name: 'docProps/app.xml', data: enc(XML_HEAD + '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>旅途分帳</Application></Properties>') });
+  files.push({ name: '_rels/.rels', data: enc(XML_HEAD + `<Relationships xmlns="${PKG_REL_NS}">` +
+    `<Relationship Id="rId1" Type="${REL_NS}/officeDocument" Target="xl/workbook.xml"/>` +
+    `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>` +
+    `<Relationship Id="rId3" Type="${REL_NS}/extended-properties" Target="docProps/app.xml"/></Relationships>`) });
+  files.unshift({ name: '[Content_Types].xml', data: enc(XML_HEAD + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+    '<Default Extension="xml" ContentType="application/xml"/>' +
+    '<Default Extension="jpeg" ContentType="image/jpeg"/>' + overrides.join('') + '</Types>') });
+  return makeZip(files);
+}
+
+/* ---------- 把旅程資料整理成工作表 ---------- */
+// 金額：數字格式，Excel 可以直接加總；台幣、日圓整數不顯示小數
+function xAmt(minor, cur) {
+  if (minor === null || minor === undefined || minor === '') return null;
+  const v = minor / 100;
+  const whole = CURRENCIES[cur] && CURRENCIES[cur].showCents === 'auto' && Number.isInteger(v);
+  return { v, fmt: whole ? 'int' : 'dec' };
+}
+function plainPayMethod(e) {
+  const m = PAY_METHODS.find(x => x.id === e.paymentMethod);
+  if (!m) return '';
+  return m.id === 'other' ? (e.paymentMethodOther || '其他') : m.name;
+}
+function plainRepayMethod(t) {
+  if (t.method === 'offset') return '互相抵銷';
+  const m = REPAY_METHODS.find(x => x.id === t.method);
+  if (!m) return '';
+  return m.id === 'other' ? (t.methodOther || '其他') : m.name;
+}
+function placeCell(text) {
+  const t = (text || '').trim();
+  if (!t) return null;
+  if (/^https?:\/\/\S+$/i.test(t)) {
+    let url = t;
+    try { url = encodeURI(decodeURI(t)); } catch (e) {}
+    return { text: t, link: url };
+  }
+  return t;
+}
+// 按明細的內容，例如「Julie：課稅 8% 396、免稅 6,540、稅 +32」
+function itemizedText(e) {
+  if (!e.itemized) return '';
+  const cur = e.currency;
+  const f = m => (m / 100).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  const ids = Object.keys(e.itemized);
+  const norm = v => {
+    if (Array.isArray(v.tax)) return { tax: v.tax, free: v.free || 0 };
+    if (v.r8 !== undefined || v.r10 !== undefined) return { tax: [v.r8 || 0, v.r10 || 0], free: v.free || 0 };
+    if (v.t2 !== undefined) return { tax: [v.t1 || 0, v.t2 || 0], free: v.free || 0 };
+    return { tax: [(v.t1 || 0) + (v.normal || 0)], free: v.free || 0 };
+  };
+  const first = Object.values(e.itemized)[0] || {};
+  const rates = e.itemizedRates || ((first.r8 !== undefined || first.r10 !== undefined) ? [8, 10] : []);
+  return ids.map(id => {
+    const x = norm(e.itemized[id]);
+    const parts = [];
+    x.tax.forEach((m, k) => { if (m) parts.push(`課稅${rates[k] != null ? ' ' + rates[k] + '%' : ''} ${f(m)}`); });
+    if (x.free) parts.push(`免稅 ${f(x.free)}`);
+    const adj = (e.shares[id] || 0) - x.tax.reduce((a, b) => a + b, 0) - x.free;
+    if (adj > 0) parts.push(`稅 +${f(adj)}`);
+    if (adj < 0) parts.push(`折抵 −${f(-adj)}`);
+    return `${memberName(id)}：${parts.join('、') || '0'} → ${f(e.shares[id] || 0)}`;
+  }).join('\n');
+}
+function recorderName(uid) {
+  const m = trip.members.find(x => x.uid && x.uid === uid);
+  return m ? m.name : '';
+}
+
+function buildExportSheets(photoData) {
+  const sheets = [];
+  const byDate = list => [...list].sort((a, b) => a.date.localeCompare(b.date) || (a.createdAt || 0) - (b.createdAt || 0));
+  const members = trip.members;
+
+  // 1. 支出
+  const expRows = byDate(expenses).map(e => {
+    const personal = isPersonal(e);
+    const cat = CATEGORIES.find(c => c.id === e.category);
+    const type = personal ? '個人開銷' : e.splitType === 'self' ? '共同開銷（各自付）' : '共同開銷';
+    const payer = personal ? memberName(personalOwner(e)) : e.splitType === 'self' ? '各自付' : memberName(e.payerId);
+    const mode = personal ? '' : ({ equal: '平均', custom: '自訂金額', itemized: '按明細' }[e.splitType === 'self' ? (e.splitMode || 'custom') : e.splitType] || '');
+    const debts = expenseDebts(e);
+    const status = debts.map(d => {
+      const t = repaymentOf(e.id, d.fromId);
+      if (!t) return `${memberName(d.fromId)} 未還`;
+      const how = plainRepayMethod(t);
+      return `${memberName(d.fromId)} 已還${how ? `（${how}）` : ''}`;
+    }).join('；');
+    return [
+      e.date, e.title, cat ? cat.name : '', xAmt(e.amount, e.currency), e.currency, type, payer, plainPayMethod(e), mode,
+      ...members.map(m => e.shares[m.id] !== undefined ? xAmt(e.shares[m.id], e.currency) : null),
+      status, e.itemized ? { text: itemizedText(e), wrap: true } : null,
+      placeCell(e.place), e.note ? { text: e.note, wrap: true } : null,
+      (e.photoIds || []).length ? { v: e.photoIds.length, fmt: 'gen' } : null, recorderName(e.createdBy)
+    ];
+  });
+  sheets.push({
+    name: '支出',
+    cols: [
+      { header: '日期', width: 11 }, { header: '項目', width: 20 }, { header: '分類', width: 8 }, { header: '金額', width: 12 },
+      { header: '幣別', width: 7 }, { header: '類型', width: 16 }, { header: '付款人', width: 10 }, { header: '用什麼付', width: 10 },
+      { header: '怎麼分', width: 9 },
+      ...members.map(m => ({ header: `${m.name} 分攤`, width: 12 })),
+      { header: '還款狀態', width: 24 }, { header: '按明細內容', width: 40 }, { header: '地點', width: 28 },
+      { header: '備註', width: 30 }, { header: '照片張數', width: 9 }, { header: '記錄者', width: 10 }
+    ],
+    rows: expRows
+  });
+
+  // 2. 結算（目前還沒還的）
+  const shared = expenses.filter(e => !isPersonal(e));
+  const settleRows = [];
+  for (const c of tripCurrencies(shared)) {
+    for (const p of pairSummary(c)) if (p.amount > 0) settleRows.push([c, memberName(p.fromId), memberName(p.toId), xAmt(p.amount, c)]);
+  }
+  if (!settleRows.length) settleRows.push(['', '都還清了', '', null]);
+  sheets.push({ name: '結算', cols: [{ header: '幣別', width: 8 }, { header: '誰', width: 12 }, { header: '還要給誰', width: 12 }, { header: '金額', width: 14 }], rows: settleRows });
+
+  // 3. 還款紀錄
+  sheets.push({
+    name: '還款紀錄',
+    cols: [{ header: '日期', width: 11 }, { header: '誰還', width: 10 }, { header: '還給誰', width: 10 }, { header: '金額', width: 12 },
+      { header: '幣別', width: 7 }, { header: '還款方式', width: 12 }, { header: '實付貨幣', width: 9 }, { header: '實付金額', width: 12 },
+      { header: '匯率', width: 10 }, { header: '對應支出', width: 20 }],
+    rows: byDate(transfers).map(t => {
+      const exp = expenses.find(e => e.id === t.expenseId);
+      const other = t.paidCurrency && t.paidCurrency !== t.currency;
+      return [t.date, memberName(t.fromId), memberName(t.toId), xAmt(t.amount, t.currency), t.currency, plainRepayMethod(t),
+        other ? t.paidCurrency : '', other ? xAmt(t.paidAmount, t.paidCurrency) : null, other ? { v: t.paidRate, fmt: 'gen' } : null,
+        exp ? exp.title : (t.expenseId ? '（已刪除）' : '')];
+    })
+  });
+
+  // 4. 每人花費
+  const sp = spendingByPerson();
+  const spRows = [];
+  for (const m of members) {
+    const mine = sp[m.id] || {};
+    for (const c of tripCurrencies()) {
+      const x = mine[c];
+      if (!x || !(x.paid || x.spent || x.personal)) continue;
+      spRows.push([m.name, c, xAmt(x.paid, c), xAmt(x.spent, c), xAmt(x.personal, c)]);
+    }
+  }
+  sheets.push({ name: '每人花費', cols: [{ header: '成員', width: 12 }, { header: '幣別', width: 7 }, { header: '共同開銷：付了', width: 15 },
+    { header: '共同開銷：分攤', width: 15 }, { header: '個人開銷', width: 12 }], rows: spRows });
+
+  // 5. 換匯
+  sheets.push({
+    name: '換匯',
+    cols: [{ header: '日期', width: 11 }, { header: '誰換的', width: 10 }, { header: '付出金額', width: 12 }, { header: '付出幣別', width: 9 },
+      { header: '換到金額', width: 12 }, { header: '換到幣別', width: 9 }, { header: '匯率', width: 22 }, { header: '在哪裡換', width: 16 }, { header: '備註', width: 24 }],
+    rows: byDate(exchanges).map(x => [x.date, memberName(x.memberId), xAmt(x.fromAmount, x.fromCurrency), x.fromCurrency,
+      xAmt(x.toAmount, x.toCurrency), x.toCurrency, exRateText(x.fromAmount, x.fromCurrency, x.toAmount, x.toCurrency).replace('匯率：', ''),
+      x.place || '', x.note ? { text: x.note, wrap: true } : null])
+  });
+
+  // 6. 筆記
+  sheets.push({ name: '筆記', cols: [{ header: '日期', width: 11 }, { header: '標題', width: 20 }, { header: '內容', width: 60 }],
+    rows: byDate(notes).map(n => [n.date, n.title || '', n.content ? { text: n.content, wrap: true } : null]) });
+
+  // 7. 照片：每筆支出一列，照片放在後面的欄
+  if (photoData) {
+    const BOX = 200;   // 照片最大 200×200 像素
+    const rows = [], images = [], rowHeights = {};
+    let maxPhotos = 0;
+    for (const e of byDate(expenses)) {
+      const list = (e.photoIds || []).map(id => photoData[id]).filter(Boolean);
+      if (!list.length) continue;
+      const r = rows.length + 2;
+      rows.push([e.date, e.title, xAmt(e.amount, e.currency), e.currency]);
+      let tallest = 0;
+      list.forEach((p, k) => {
+        const scale = Math.min(1, BOX / Math.max(p.w, p.h));
+        const w = Math.round(p.w * scale), h = Math.round(p.h * scale);
+        tallest = Math.max(tallest, h);
+        images.push({ row: r, col: 4 + k, bytes: p.bytes, w, h });
+      });
+      rowHeights[r] = Math.round((tallest + 8) * 0.75);   // 像素 → 點
+      maxPhotos = Math.max(maxPhotos, list.length);
+    }
+    if (rows.length) {
+      sheets.push({
+        name: '照片',
+        cols: [{ header: '日期', width: 11 }, { header: '項目', width: 18 }, { header: '金額', width: 12 }, { header: '幣別', width: 7 },
+          ...Array.from({ length: maxPhotos }, (_, k) => ({ header: `照片 ${k + 1}`, width: 30 }))],
+        rows, images, rowHeights
+      });
+    }
+  }
+  return sheets;
+}
+
+/* ---------- 讀照片 ---------- */
+function dataUrlToBytes(dataUrl) {
+  const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function imageSize(dataUrl) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => resolve({ w: img.naturalWidth || 200, h: img.naturalHeight || 200 });
+    img.onerror = () => resolve({ w: 200, h: 200 });
+    img.src = dataUrl;
+  });
+}
+async function loadAllPhotos(status) {
+  const ids = expenses.flatMap(e => e.photoIds || []);
+  if (!ids.length) return {};
+  status(`正在讀取 ${ids.length} 張照片…`);
+  const snap = await tripRef().collection('photos').get();
+  const out = {};
+  for (const d of snap.docs) {
+    const p = d.data();
+    if (!p || !p.data || !ids.includes(d.id)) continue;
+    if (!/^data:image\/jpe?g/i.test(p.data)) continue;   // 照片都是在手機上壓成 JPEG 的
+    const size = await imageSize(p.data);
+    out[d.id] = { bytes: dataUrlToBytes(p.data), ...size };
+  }
+  return out;
+}
+
+/* ---------- 設定頁：匯出按鈕 ---------- */
+let lastExport = null;   // { file, url }
+
+function renderExportCard() {
+  const n = expenses.reduce((a, e) => a + (e.photoIds || []).length, 0);
+  document.getElementById('export-photo-hint').textContent = n
+    ? `共 ${n} 張，照片放在「照片」工作表。照片多的話檔案會比較大`
+    : '目前沒有照片';
+}
+
+async function exportExcel() {
+  const btn = document.getElementById('export-btn');
+  const status = msg => { document.getElementById('export-status').textContent = msg; };
+  document.getElementById('export-ready').style.display = 'none';
+  btn.disabled = true;
+  try {
+    let photos = null;
+    if (document.getElementById('export-photos').checked) {
+      try { photos = await loadAllPhotos(status); }
+      catch (e) { console.error(e); status('照片讀取失敗，先匯出不含照片的檔案'); photos = null; }
+    }
+    status('正在產生 Excel…');
+    const blob = buildXlsx(buildExportSheets(photos));
+    const safeName = String(trip.name).replace(/[\\/:*?"<>|]/g, ' ').trim() || '旅程';
+    const fileName = `${safeName}_旅途分帳_${todayStr()}.xlsx`;
+    if (lastExport) URL.revokeObjectURL(lastExport.url);
+    const file = new File([blob], fileName, { type: blob.type });
+    lastExport = { file, url: URL.createObjectURL(blob) };
+    const kb = blob.size / 1024;
+    status(`完成：${fileName}（${kb > 1024 ? (kb / 1024).toFixed(1) + ' MB' : Math.ceil(kb) + ' KB'}）`);
+    document.getElementById('export-ready').style.display = 'block';
+    document.getElementById('export-share').style.display =
+      (navigator.canShare && navigator.canShare({ files: [file] })) ? 'block' : 'none';
+    downloadExport();
+  } catch (e) {
+    console.error(e);
+    status('匯出失敗：' + (e.message || e));
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function downloadExport() {
+  if (!lastExport) return;
+  const a = document.createElement('a');
+  a.href = lastExport.url;
+  a.download = lastExport.file.name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function shareExport() {
+  if (!lastExport) return;
+  try {
+    await navigator.share({ files: [lastExport.file], title: lastExport.file.name });
+  } catch (e) {
+    if (e.name !== 'AbortError') alert('無法分享：' + (e.message || e) + '\n請改按「下載檔案」');
+  }
 }
 
 /* ---------- 啟動（永遠放在 script 最後面，所有變數和函式都定義好之後才執行） ---------- */

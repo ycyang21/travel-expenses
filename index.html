@@ -328,18 +328,17 @@
   .summary-line { font-size: 14px; color: var(--muted); margin: 0 4px 10px; }
   .map-link { display: inline-block; margin-top: 6px; font-size: 14px; color: var(--stamp); }
 
-  /* ===== 按明細（課稅／免稅，可分兩種稅率） ===== */
+  /* ===== 按明細（課稅可自訂多種稅率／免稅） ===== */
   .item-person { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
   .item-person:first-child { border-top: 0; padding-top: 0; }
   .item-person .name { font-weight: 600; margin-bottom: 4px; }
-  .item-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-  .item-cols.two { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-  .rate-inputs { display: flex; align-items: center; gap: 6px; margin: 8px 0 4px 32px; font-size: 15px; }
-  .rate-inputs input { width: 72px; padding: 8px; text-align: center; }
-  .item-cols input { padding: 10px 30px 10px 8px; }
-  .item-cols .calc-btn { width: 28px; right: 2px; }
-  .item-cols .calc-btn svg { width: 17px; height: 17px; }
-  .item-cols small { display: block; font-size: 13px; color: var(--muted); margin-bottom: 2px; }
+  .rate-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+  .rate-chip { display: flex; align-items: center; gap: 2px; border: 1px solid var(--line); border-radius: 10px; padding: 2px 4px 2px 8px; background: #fff; }
+  .rate-chip input { width: 56px; padding: 6px 4px; border: 0; text-align: right; font-size: 16px; }
+  .rate-chip button { border: 0; background: none; color: var(--muted); padding: 6px 6px; font-size: 14px; }
+  .rate-add { border: 1px dashed var(--stamp); border-radius: 10px; background: #fff; color: var(--stamp); padding: 9px 12px; font-size: 14px; }
+  .item-rows .item-row { display: grid; grid-template-columns: 6.2em 1fr; align-items: center; gap: 8px; margin-top: 6px; }
+  .item-rows .item-row span { font-size: 14px; color: var(--muted); }
   .item-sum { margin-top: 14px; padding: 12px; border-radius: 10px; background: var(--paper); font-size: 15px; }
   .item-sum .line { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; }
   .item-sum .line small { display: block; color: var(--muted); font-size: 13px; }
@@ -1231,9 +1230,8 @@ function openAddForm() {
     selfPay: false,                               // 各自付
     splitMode: 'equal',                           // 怎麼分：equal 平均／custom 自訂金額／itemized 按明細
     customText: {},                               // 自訂金額的輸入文字
-    itemText: {},                                 // 按明細：{ 成員id: { t1: 課稅（或第一種稅率）, t2: 第二種稅率, free: 免稅 } }
-    twoRates: false,                              // 這張收據有兩種稅率
-    rateText: ['', ''],                           // 兩種稅率（%）
+    itemText: {},                                 // 按明細：{ 成員id: { tax0, tax1, …（各稅率的課稅商品）, free（免稅） } }
+    rateText: defaultRates(lastCurrency),         // 稅率（%），可以有很多種；只有一種時可以不填
     repay: {}                                     // 當場已還：{ 成員id: { checked, method, methodOther } }
   };
   document.getElementById('f-amount').value = '';
@@ -1273,8 +1271,7 @@ function openEditForm(id) {
     splitMode: e.splitType === 'self' ? (e.splitMode || 'custom') : e.splitType,
     customText: {},
     itemText: {},
-    twoRates: false,
-    rateText: ['', ''],
+    rateText: defaultRates(e.currency),
     repay: {}
   };
   if (draft.splitMode === 'custom') {
@@ -1282,17 +1279,23 @@ function openEditForm(id) {
   }
   if (draft.splitMode === 'itemized' && e.itemized) {
     for (const [mid, v] of Object.entries(e.itemized)) {
-      // 相容舊版：{ free, normal }（只有一種稅率）、{ r8, r10, free }（日本 8%／10%）
+      // 相容舊版：{ free, normal }、{ t1, t2, free }、{ r8, r10, free }
       const t = x => x ? toText(x) : '';
-      if (v.r8 !== undefined || v.r10 !== undefined) {
-        draft.twoRates = true;
-        draft.itemText[mid] = { t1: t(v.r8), t2: t(v.r10), free: t(v.free) };
-      } else {
-        draft.itemText[mid] = { t1: t((v.t1 || 0) + (v.normal || 0)), t2: t(v.t2), free: t(v.free) };
-      }
+      let tax;
+      if (Array.isArray(v.tax)) tax = v.tax;
+      else if (v.r8 !== undefined || v.r10 !== undefined) tax = [v.r8 || 0, v.r10 || 0];
+      else if (v.t2 !== undefined) tax = [v.t1 || 0, v.t2 || 0];
+      else tax = [(v.t1 || 0) + (v.normal || 0)];
+      draft.itemText[mid] = { free: t(v.free) };
+      tax.forEach((x, k) => { draft.itemText[mid]['tax' + k] = t(x); });
     }
-    if (e.itemizedRates) { draft.twoRates = true; draft.rateText = e.itemizedRates.map(String); }
-    else if (draft.twoRates) draft.rateText = ['8', '10'];
+    // 稅率：新版存在 itemizedRates；舊版 r8/r10 是日本 8%、10%
+    const anyOld = Object.values(e.itemized)[0] || {};
+    const n = Math.max(...Object.values(draft.itemText).map(o => Object.keys(o).filter(k => k.startsWith('tax')).length), 1);
+    if (e.itemizedRates) draft.rateText = e.itemizedRates.map(r => r == null || isNaN(r) ? '' : String(r));
+    else if (anyOld.r8 !== undefined || anyOld.r10 !== undefined) draft.rateText = ['8', '10'];
+    else draft.rateText = Array(n).fill('');
+    while (draft.rateText.length < n) draft.rateText.push('');
   }
   document.getElementById('f-amount').value = toText(e.amount);
   document.getElementById('f-title').value = e.title;
@@ -1399,6 +1402,12 @@ function setPayer(id) {
 
 function onCurrencyChange() {
   draft.currency = document.getElementById('f-currency').value;
+  // 還沒填課稅金額的話，稅率換成這種貨幣上次用的
+  const filled = Object.values(draft.itemText).some(o => Object.keys(o).some(k => k.startsWith('tax') && (o[k] || '').trim()));
+  if (!filled) {
+    draft.rateText = defaultRates(draft.currency);
+    document.getElementById('split-detail').dataset.key = '';
+  }
   updateForm();
 }
 
@@ -1424,25 +1433,24 @@ function updateForm() {
     box.innerHTML = '<div class="hint">' + ids.map((id, i) =>
       `${escapeHTML(memberName(id))} ${formatAmount(parts[i], cur)}`).join('、') + '</div>';
   } else if (draft.splitMode === 'itemized') {
-    // 按明細：只在換人、換模式、切換兩種稅率時重建，避免打字時輸入框跳掉
-    const key = 'itemized|' + draft.twoRates + '|' + ids.join();
+    // 按明細：只在換人、換模式、增減稅率時重建，避免打字時輸入框跳掉
+    const key = 'itemized|' + draft.rateText.length + '|' + ids.join();
     if (box.dataset.key !== key) {
       box.dataset.key = key;
-      const cols = itemCols();
-      const field = (id, col) => {
+      const row = (id, col) => {
         const t = (draft.itemText[id] || {})[col] || '';
-        return `<div><small data-label-col="${col}">${itemColLabel(col)}</small><div class="calc-wrap">` +
+        return `<div class="item-row"><span data-label-col="${col}">${itemColLabel(col)}</span><div class="calc-wrap">` +
           `<input inputmode="decimal" data-mid="${id}" data-col="${col}" value="${escapeHTML(t)}" placeholder="0" ` +
           `oninput="setItemText('${id}','${col}',this.value)" onchange="settleItemExpr(this,'${id}','${col}')">` +
           `<button class="calc-btn" onclick="openCalc(this.previousElementSibling, 'item', '${id}', '${col}')" aria-label="開啟計算機">${CALC_ICON}</button></div></div>`;
       };
-      box.innerHTML = `<label class="check-row" style="margin-top:4px"><input type="checkbox" ${draft.twoRates ? 'checked' : ''} onchange="setTwoRates(this.checked)">
-          <span>這張收據有兩種稅率<small>例如日本的 8% 和 10%，而且未稅價結帳時才加稅</small></span></label>` +
-        (draft.twoRates ? `<div class="rate-inputs">稅率
-          <input inputmode="decimal" value="${escapeHTML(draft.rateText[0])}" placeholder="8" oninput="setRateText(0, this.value)">% 和
-          <input inputmode="decimal" value="${escapeHTML(draft.rateText[1])}" placeholder="10" oninput="setRateText(1, this.value)">%</div>` : '') +
+      const cols = itemCols();
+      box.innerHTML = `<div class="rate-bar"><span class="hint" style="margin:0">稅率</span>` +
+          draft.rateText.map((r, k) => `<span class="rate-chip"><input inputmode="decimal" value="${escapeHTML(r)}" placeholder="${draft.rateText.length > 1 ? '必填' : '可不填'}" oninput="setRateText(${k}, this.value)">%` +
+            (draft.rateText.length > 1 ? `<button onclick="removeRate(${k})" aria-label="刪除這個稅率">✕</button>` : '') + '</span>').join('') +
+          `<button class="rate-add" onclick="addRate()">＋ 新增稅率</button></div>` +
         ids.map(id => `<div class="item-person"><div class="name">${escapeHTML(memberName(id))}</div>
-          <div class="item-cols ${cols.length === 2 ? 'two' : ''}">${cols.map(c => field(id, c)).join('')}</div></div>`).join('') +
+          <div class="item-rows">${cols.map(c => row(id, c)).join('')}</div></div>`).join('') +
         '<div class="item-sum" id="item-sum"></div>';
     }
     updateItemized();
@@ -1515,7 +1523,7 @@ function saveExpense() {
     if (r.warning && !confirm(r.warning + '\n\n確定要儲存嗎？')) return;
     parts = ids.map(id => r.shares[id]);
     itemized = r.itemized;
-    if (draft.twoRates) localStorage.setItem(RATES_KEY + cur, draft.rateText.join(','));   // 記住這種貨幣用的稅率
+    localStorage.setItem(RATES_KEY + cur, JSON.stringify(draft.rateText));   // 記住這種貨幣用的稅率
   } else {
     parts = ids.map(id => parseAmount(draft.customText[id] || '0', cur));
     if (parts.some(p => p === null)) { alert('有人的金額格式不對'); return; }
@@ -1550,7 +1558,7 @@ function saveExpense() {
     splitType: personal ? 'personal' : (draft.selfPay ? 'self' : draft.splitMode),   // equal / custom / self（各自付）/ personal（個人開銷）
     splitMode: draft.splitMode,                              // 各自付時用平均還是自訂金額
     itemized: personal ? null : itemized,
-    itemizedRates: (!personal && itemized && draft.twoRates) ? itemRates() : null,
+    itemizedRates: (!personal && itemized) ? itemRates().map(r => isNaN(r) ? null : r) : null,
     shares,
     v: 2,   // 資料格式版本：金額統一存到小數點後兩位
     updatedAt: now
@@ -2312,7 +2320,7 @@ async function logout() {
    一直卡在「連線中」時，畫面上會顯示可能原因、錯誤訊息和版本，
    截圖給別人看就能判斷問題出在哪裡。
    ========================================================= */
-const APP_VERSION = '2026-10-03 按明細：稅率可自訂';   // 每次改版更新，用來確認上傳的是不是最新檔案
+const APP_VERSION = '2026-10-03 按明細：稅率可新增';   // 每次改版更新，用來確認上傳的是不是最新檔案
 let authResolved = false;
 const diagErrors = [];
 
@@ -3018,30 +3026,49 @@ function updatePlaceLink() {
    加總一定剛好等於實付（allocate 會處理零頭）。
    ========================================================= */
 const ITEM_WARN_PCT = 20;   // 免稅折抵超過免稅商品的 20% 就提醒（一般約 7–9%）
-const RATES_KEY = 'travelSplit_taxRates_';   // 每種貨幣上次用的兩種稅率
+const RATES_KEY = 'travelSplit_taxRates_';   // 每種貨幣上次用的稅率
 
-function itemCols() { return draft.twoRates ? ['t1', 't2', 'free'] : ['t1', 'free']; }
+// 新表單的稅率：沿用這種貨幣上次用的；沒有的話一欄、不填
+function defaultRates(cur) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(RATES_KEY + cur) || 'null');
+    if (Array.isArray(saved) && saved.length) return saved.map(String);
+  } catch (e) {}
+  return [''];
+}
+function itemCols() { return [...draft.rateText.map((_, k) => 'tax' + k), 'free']; }
 function itemRates() { return draft.rateText.map(t => parseFloat(t)); }
 function itemColLabel(col) {
-  if (col === 'free') return draft.twoRates ? '免稅' : '免稅／不課稅';
-  if (!draft.twoRates) return '課稅';
-  const r = draft.rateText[col === 't1' ? 0 : 1];
-  return `課稅 ${r || '?'}%`;
+  if (col === 'free') return '免稅／不課稅';
+  const r = draft.rateText[Number(col.slice(3))];
+  return r ? `課稅 ${r}%` : '課稅';
 }
-
-function setTwoRates(on) {
-  draft.twoRates = on;
-  if (on && !draft.rateText.some(Boolean)) {
-    const saved = localStorage.getItem(RATES_KEY + draft.currency);
-    draft.rateText = saved ? saved.split(',') : (draft.currency === 'JPY' ? ['8', '10'] : ['', '']);
+function refreshItemLabels() {
+  document.querySelectorAll('#split-detail [data-label-col]').forEach(el => { el.textContent = itemColLabel(el.dataset.labelCol); });
+}
+function setRateText(k, value) {
+  draft.rateText[k] = value.trim();
+  refreshItemLabels();   // 只改名稱，不重建輸入框
+  updateItemized();
+}
+function addRate() {
+  draft.rateText.push('');
+  updateForm();
+  const inputs = document.querySelectorAll('#split-detail .rate-chip input');
+  if (inputs.length) inputs[inputs.length - 1].focus();
+}
+function removeRate(k) {
+  if (draft.rateText.length <= 1) return;
+  const hasValue = Object.values(draft.itemText).some(o => (o['tax' + k] || '').trim());
+  if (hasValue && !confirm('這個稅率已經有填金額，刪除後這些金額也會清掉。確定刪除？')) return;
+  draft.rateText.splice(k, 1);
+  // 後面的稅率往前移
+  for (const o of Object.values(draft.itemText)) {
+    const arr = draft.rateText.map((_, i) => o['tax' + (i >= k ? i + 1 : i)] || '');
+    Object.keys(o).filter(x => x.startsWith('tax')).forEach(x => delete o[x]);
+    arr.forEach((t, i) => { o['tax' + i] = t; });
   }
   updateForm();
-}
-function setRateText(i, value) {
-  draft.rateText[i] = value.trim();
-  // 只改欄位名稱，不重建輸入框
-  document.querySelectorAll('#split-detail [data-label-col]').forEach(el => { el.textContent = itemColLabel(el.dataset.labelCol); });
-  updateItemized();
 }
 
 // 把 - * / x 換成計算機用的符號
@@ -3062,7 +3089,7 @@ function parseItemText(text, cur) {
 }
 
 function setItemText(id, col, value) {
-  draft.itemText[id] = draft.itemText[id] || { t1: '', t2: '', free: '' };
+  draft.itemText[id] = draft.itemText[id] || { free: '' };
   draft.itemText[id][col] = value;
   updateItemized();
 }
@@ -3077,30 +3104,30 @@ function settleItemExpr(input, id, col) {
 }
 
 function computeItemized(amount, cur, ids) {
-  const cols = itemCols();
-  const v = {};   // v[id] = { t1, t2, free }（一種稅率時 t2 一律是 0）
+  const nRates = draft.rateText.length;
+  const v = {};   // v[id] = { tax: [各稅率的課稅商品], free }
   for (const id of ids) {
     const t = draft.itemText[id] || {};
-    v[id] = { t1: 0, t2: 0, free: 0 };
-    for (const c of cols) {
-      v[id][c] = parseItemText(t[c], cur);
-      if (v[id][c] === null) return { error: `${memberName(id)} 的金額格式不對` };
-    }
+    v[id] = { tax: [], free: parseItemText(t.free, cur) };
+    for (let k = 0; k < nRates; k++) v[id].tax.push(parseItemText(t['tax' + k], cur));
+    if (v[id].free === null || v[id].tax.some(x => x === null)) return { error: `${memberName(id)} 的金額格式不對` };
   }
-  const sum = c => ids.reduce((a, id) => a + v[id][c], 0);
-  const t1Sum = sum('t1'), t2Sum = sum('t2'), freeSum = sum('free');
-  const taxedSum = t1Sum + t2Sum;
+  const taxSums = draft.rateText.map((_, k) => ids.reduce((a, id) => a + v[id].tax[k], 0));
+  const freeSum = ids.reduce((a, id) => a + v[id].free, 0);
+  const taxedSum = taxSums.reduce((a, b) => a + b, 0);
   const gross = taxedSum + freeSum;
-  const rates = draft.twoRates ? itemRates() : null;
-  const base = { v, t1Sum, t2Sum, freeSum, taxedSum, gross, rates };
+  const rates = itemRates();
+  const base = { v, taxSums, freeSum, taxedSum, gross, rates };
   const f = x => formatAmount(x, cur);
-  if (rates && !(rates[0] >= 0 && rates[1] >= 0 && rates[0] + rates[1] > 0)) return { ...base, error: '請輸入兩種稅率' };
   if (!amount) return { ...base, error: '請先在最上面輸入實際付的金額' };
   if (!gross) return { ...base, error: '請填每個人的商品金額' };
   const diff = amount - gross;
+  // 有填金額的稅率欄
+  const used = taxSums.map((x, k) => x > 0 ? k : -1).filter(k => k >= 0);
+  const ratesKnown = used.length > 0 && used.every(k => rates[k] >= 0);
 
   // 台幣、日圓這類整數貨幣，輸入都是整數時，結果也分到整數（不會出現 ¥1,620.37）
-  const all = [amount, ...ids.flatMap(id => [v[id].t1, v[id].t2, v[id].free])];
+  const all = [amount, ...ids.flatMap(id => [...v[id].tax, v[id].free])];
   const unit = (CURRENCIES[cur].showCents === 'auto' && all.every(x => x % 100 === 0)) ? 100 : 1;
 
   let adj = ids.map(() => 0);   // 每人加上（稅）或扣掉（免稅折抵）的金額
@@ -3110,16 +3137,20 @@ function computeItemized(amount, cur, ids) {
     // A. 未稅價＋稅：稅只加在課稅商品上
     if (!taxedSum) return { ...base, diff, error: `實付比商品合計多 ${f(diff)}，但沒有填課稅商品。如果收據是含稅價，請檢查金額` };
     kind = 'tax';
-    const weights = rates
-      ? ids.map(id => v[id].t1 * rates[0] + v[id].t2 * rates[1])   // 兩種稅率：按「金額 × 稅率」
-      : ids.map(id => v[id].t1);                                    // 一種稅率：按金額比例
+    let weights;
+    if (used.length === 1) {
+      weights = ids.map(id => v[id].tax[used[0]]);   // 只有一種稅率：按金額比例分，稅率填不填都正確
+    } else {
+      if (!ratesKnown) return { ...base, diff, error: '課稅商品有兩種以上的稅率，請把稅率都填上，才能正確分稅' };
+      weights = ids.map(id => used.reduce((a, k) => a + v[id].tax[k] * rates[k], 0));   // 按「金額 × 稅率」
+    }
     adj = allocate(diff / unit, weights).map(x => x * unit);
-    if (rates) {
+    if (ratesKnown) {
       // 依稅率算一次（各稅率分開計算、小數捨去），拿來跟收據核對
       const u = CURRENCIES[cur].showCents === 'auto' ? 100 : 1;
-      expectedTax = Math.floor(t1Sum * rates[0] / 100 / u) * u + Math.floor(t2Sum * rates[1] / 100 / u) * u;
+      expectedTax = used.reduce((a, k) => a + Math.floor(taxSums[k] * rates[k] / 100 / u) * u, 0);
       if (Math.abs(diff - expectedTax) > 3 * u) {
-        warning = `多出的 ${f(diff)} 跟依稅率算出來的 ${f(expectedTax)} 對不上。請確認收據是未稅價、稅率正確，以及金額有沒有填錯欄`;
+        warning = `多出的 ${f(diff)} 跟依稅率算出來的 ${f(expectedTax)} 對不上。請確認收據是未稅價、稅率正確，以及金額有沒有填錯列（如果含小費，對不上是正常的）`;
       }
     }
   } else if (diff < 0) {
@@ -3137,10 +3168,10 @@ function computeItemized(amount, cur, ids) {
   const shares = {}, adjBy = {}, itemized = {};
   ids.forEach((id, i) => {
     adjBy[id] = adj[i];
-    shares[id] = v[id].t1 + v[id].t2 + v[id].free + adj[i];
-    itemized[id] = draft.twoRates ? { t1: v[id].t1, t2: v[id].t2, free: v[id].free } : { t1: v[id].t1, free: v[id].free };
+    shares[id] = v[id].tax.reduce((a, b) => a + b, 0) + v[id].free + adj[i];
+    itemized[id] = { tax: v[id].tax, free: v[id].free };
   });
-  return { ...base, diff, kind, expectedTax, warning, shares, adjBy, itemized };
+  return { ...base, diff, kind, ratesKnown, expectedTax, warning, shares, adjBy, itemized };
 }
 
 function updateItemized() {
@@ -3159,7 +3190,7 @@ function updateItemized() {
   }
   let html = `<div class="line total"><span>商品合計 ${f(r.gross)} → 實付</span><b>${f(amount)}</b></div>`;
   if (r.kind === 'tax') {
-    const note = r.rates
+    const note = r.ratesKnown
       ? (r.warning ? `依稅率計算應該是 ${f(r.expectedTax)}` : `依稅率計算 ${f(r.expectedTax)}，對得上 ✓`)
       : `約課稅商品的 ${(r.diff / r.taxedSum * 100).toFixed(2)}%，可以跟收據上的稅率對照`;
     html += `<div class="line"><span>稅（加在課稅商品上）<small>${note}</small></span><b>＋${f(r.diff)}</b></div>`;
@@ -3171,8 +3202,7 @@ function updateItemized() {
   html += ids.map(id => {
     const x = r.v[id], a = r.adjBy[id];
     const parts = [];
-    if (x.t1) parts.push(`${r.rates ? r.rates[0] + '%' : '課稅'} ${f(x.t1)}`);
-    if (x.t2) parts.push(`${r.rates[1]}% ${f(x.t2)}`);
+    x.tax.forEach((amt, k) => { if (amt) parts.push(`${r.rates[k] >= 0 ? r.rates[k] + '%' : '課稅'} ${f(amt)}`); });
     if (x.free) parts.push(`免稅 ${f(x.free)}`);
     if (a > 0) parts.push(`稅 ＋${f(a)}`);
     if (a < 0) parts.push(`折抵 −${f(-a)}`);

@@ -328,11 +328,17 @@
   .summary-line { font-size: 14px; color: var(--muted); margin: 0 4px 10px; }
   .map-link { display: inline-block; margin-top: 6px; font-size: 14px; color: var(--stamp); }
 
-  /* ===== 按明細（免稅／不免稅） ===== */
+  /* ===== 按明細（課稅／免稅，可分兩種稅率） ===== */
   .item-person { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
   .item-person:first-child { border-top: 0; padding-top: 0; }
   .item-person .name { font-weight: 600; margin-bottom: 4px; }
-  .item-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .item-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .item-cols.two { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .rate-inputs { display: flex; align-items: center; gap: 6px; margin: 8px 0 4px 32px; font-size: 15px; }
+  .rate-inputs input { width: 72px; padding: 8px; text-align: center; }
+  .item-cols input { padding: 10px 30px 10px 8px; }
+  .item-cols .calc-btn { width: 28px; right: 2px; }
+  .item-cols .calc-btn svg { width: 17px; height: 17px; }
   .item-cols small { display: block; font-size: 13px; color: var(--muted); margin-bottom: 2px; }
   .item-sum { margin-top: 14px; padding: 12px; border-radius: 10px; background: var(--paper); font-size: 15px; }
   .item-sum .line { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; }
@@ -1225,7 +1231,9 @@ function openAddForm() {
     selfPay: false,                               // 各自付
     splitMode: 'equal',                           // 怎麼分：equal 平均／custom 自訂金額／itemized 按明細
     customText: {},                               // 自訂金額的輸入文字
-    itemText: {},                                 // 按明細：{ 成員id: { free: 免稅商品, normal: 不免稅商品 } }
+    itemText: {},                                 // 按明細：{ 成員id: { t1: 課稅（或第一種稅率）, t2: 第二種稅率, free: 免稅 } }
+    twoRates: false,                              // 這張收據有兩種稅率
+    rateText: ['', ''],                           // 兩種稅率（%）
     repay: {}                                     // 當場已還：{ 成員id: { checked, method, methodOther } }
   };
   document.getElementById('f-amount').value = '';
@@ -1265,6 +1273,8 @@ function openEditForm(id) {
     splitMode: e.splitType === 'self' ? (e.splitMode || 'custom') : e.splitType,
     customText: {},
     itemText: {},
+    twoRates: false,
+    rateText: ['', ''],
     repay: {}
   };
   if (draft.splitMode === 'custom') {
@@ -1272,8 +1282,17 @@ function openEditForm(id) {
   }
   if (draft.splitMode === 'itemized' && e.itemized) {
     for (const [mid, v] of Object.entries(e.itemized)) {
-      draft.itemText[mid] = { free: v.free ? toText(v.free) : '', normal: v.normal ? toText(v.normal) : '' };
+      // 相容舊版：{ free, normal }（只有一種稅率）、{ r8, r10, free }（日本 8%／10%）
+      const t = x => x ? toText(x) : '';
+      if (v.r8 !== undefined || v.r10 !== undefined) {
+        draft.twoRates = true;
+        draft.itemText[mid] = { t1: t(v.r8), t2: t(v.r10), free: t(v.free) };
+      } else {
+        draft.itemText[mid] = { t1: t((v.t1 || 0) + (v.normal || 0)), t2: t(v.t2), free: t(v.free) };
+      }
     }
+    if (e.itemizedRates) { draft.twoRates = true; draft.rateText = e.itemizedRates.map(String); }
+    else if (draft.twoRates) draft.rateText = ['8', '10'];
   }
   document.getElementById('f-amount').value = toText(e.amount);
   document.getElementById('f-title').value = e.title;
@@ -1329,7 +1348,7 @@ function buildForm() {
   document.getElementById('seg-itemized').classList.toggle('on', draft.splitMode === 'itemized');
   document.getElementById('split-hint').textContent = [
     draft.selfPay ? '每個人自己付自己那份，不會產生欠款' : '',
-    draft.splitMode === 'itemized' ? '金額填實際付的錢；每個人填自己商品打折後的價格，免稅折抵會按免稅商品的比例分攤' : ''
+    draft.splitMode === 'itemized' ? '金額填實際付的錢；每個人照收據上的價格（打折後）填。未稅價或含稅價都可以，系統會自動把稅或免稅折抵分給對應的商品' : ''
   ].filter(Boolean).join('。');
   document.getElementById('participants-label').textContent = draft.selfPay ? '有誰參加' : '誰要分';
   document.getElementById('repay-sec').style.display = (draft.selfPay || draft.personal) ? 'none' : 'block';
@@ -1405,19 +1424,25 @@ function updateForm() {
     box.innerHTML = '<div class="hint">' + ids.map((id, i) =>
       `${escapeHTML(memberName(id))} ${formatAmount(parts[i], cur)}`).join('、') + '</div>';
   } else if (draft.splitMode === 'itemized') {
-    // 按明細：每人兩個輸入框。只在換人或換模式時重建，避免打字時輸入框跳掉
-    const key = 'itemized|' + ids.join();
+    // 按明細：只在換人、換模式、切換兩種稅率時重建，避免打字時輸入框跳掉
+    const key = 'itemized|' + draft.twoRates + '|' + ids.join();
     if (box.dataset.key !== key) {
       box.dataset.key = key;
-      const field = (id, col, label) => {
+      const cols = itemCols();
+      const field = (id, col) => {
         const t = (draft.itemText[id] || {})[col] || '';
-        return `<div><small>${label}</small><div class="calc-wrap">` +
+        return `<div><small data-label-col="${col}">${itemColLabel(col)}</small><div class="calc-wrap">` +
           `<input inputmode="decimal" data-mid="${id}" data-col="${col}" value="${escapeHTML(t)}" placeholder="0" ` +
-          `oninput="setItemText('${id}','${col}',this.value)">` +
+          `oninput="setItemText('${id}','${col}',this.value)" onchange="settleItemExpr(this,'${id}','${col}')">` +
           `<button class="calc-btn" onclick="openCalc(this.previousElementSibling, 'item', '${id}', '${col}')" aria-label="開啟計算機">${CALC_ICON}</button></div></div>`;
       };
-      box.innerHTML = ids.map(id => `<div class="item-person"><div class="name">${escapeHTML(memberName(id))}</div>
-          <div class="item-cols">${field(id, 'free', '免稅商品')}${field(id, 'normal', '不免稅商品')}</div></div>`).join('') +
+      box.innerHTML = `<label class="check-row" style="margin-top:4px"><input type="checkbox" ${draft.twoRates ? 'checked' : ''} onchange="setTwoRates(this.checked)">
+          <span>這張收據有兩種稅率<small>例如日本的 8% 和 10%，而且未稅價結帳時才加稅</small></span></label>` +
+        (draft.twoRates ? `<div class="rate-inputs">稅率
+          <input inputmode="decimal" value="${escapeHTML(draft.rateText[0])}" placeholder="8" oninput="setRateText(0, this.value)">% 和
+          <input inputmode="decimal" value="${escapeHTML(draft.rateText[1])}" placeholder="10" oninput="setRateText(1, this.value)">%</div>` : '') +
+        ids.map(id => `<div class="item-person"><div class="name">${escapeHTML(memberName(id))}</div>
+          <div class="item-cols ${cols.length === 2 ? 'two' : ''}">${cols.map(c => field(id, c)).join('')}</div></div>`).join('') +
         '<div class="item-sum" id="item-sum"></div>';
     }
     updateItemized();
@@ -1487,10 +1512,10 @@ function saveExpense() {
   } else if (draft.splitMode === 'itemized') {
     const r = computeItemized(amount, cur, ids);
     if (r.error) { alert(r.error); return; }
-    if (r.freeSum && r.discount / r.freeSum * 100 > ITEM_WARN_PCT &&
-        !confirm(`折抵 ${formatAmount(r.discount, cur)} 約是免稅商品的 ${(r.discount / r.freeSum * 100).toFixed(0)}%，比一般免稅高很多。確定金額沒有輸入錯？`)) return;
+    if (r.warning && !confirm(r.warning + '\n\n確定要儲存嗎？')) return;
     parts = ids.map(id => r.shares[id]);
     itemized = r.itemized;
+    if (draft.twoRates) localStorage.setItem(RATES_KEY + cur, draft.rateText.join(','));   // 記住這種貨幣用的稅率
   } else {
     parts = ids.map(id => parseAmount(draft.customText[id] || '0', cur));
     if (parts.some(p => p === null)) { alert('有人的金額格式不對'); return; }
@@ -1525,6 +1550,7 @@ function saveExpense() {
     splitType: personal ? 'personal' : (draft.selfPay ? 'self' : draft.splitMode),   // equal / custom / self（各自付）/ personal（個人開銷）
     splitMode: draft.splitMode,                              // 各自付時用平均還是自訂金額
     itemized: personal ? null : itemized,
+    itemizedRates: (!personal && itemized && draft.twoRates) ? itemRates() : null,
     shares,
     v: 2,   // 資料格式版本：金額統一存到小數點後兩位
     updatedAt: now
@@ -1861,7 +1887,7 @@ function openCalc(input, kind, memberId, col) {
   calc = { input, kind, memberId, col, expr: normalizeOps(input.value).replace(/[^\d.+−×÷]/g, '').replace(/\.$/, '') };
   document.getElementById('calc-label').textContent =
     kind === 'amount' ? `總金額（${draft.currency}）` :
-    kind === 'item' ? `${memberName(memberId)} 的${col === 'free' ? '免稅' : '不免稅'}商品（${draft.currency}）` :
+    kind === 'item' ? `${memberName(memberId)} 的${itemColLabel(col)}商品（${draft.currency}）` :
     `${memberName(memberId)} 要付（${draft.currency}）`;
   renderCalcQuick();
   renderCalc();
@@ -2286,7 +2312,7 @@ async function logout() {
    一直卡在「連線中」時，畫面上會顯示可能原因、錯誤訊息和版本，
    截圖給別人看就能判斷問題出在哪裡。
    ========================================================= */
-const APP_VERSION = '2026-10-03 按明細分攤';   // 每次改版更新，用來確認上傳的是不是最新檔案
+const APP_VERSION = '2026-10-03 按明細：稅率可自訂';   // 每次改版更新，用來確認上傳的是不是最新檔案
 let authResolved = false;
 const diagErrors = [];
 
@@ -2974,23 +3000,56 @@ function updatePlaceLink() {
 
 
 /* =========================================================
-   按明細：免稅／不免稅商品，免稅折抵按比例分攤
+   按明細：課稅／免稅（可分兩種稅率）
    ---------------------------------------------------------
-   輸入：實付金額、每個人的免稅商品小計、不免稅商品小計（都是打折後的價格）
-   1. 免稅折抵 ＝ 商品合計 − 實付
-   2. 免稅折抵按每個人「免稅商品」的比例分攤
-   3. 每人要付 ＝ 免稅商品 − 分到的折抵 ＋ 不免稅商品
+   輸入：實付金額、每個人照收據價格填的金額（打折後）
+     一般：  課稅｜免稅／不課稅
+     兩種稅率：課稅 A%｜課稅 B%｜免稅（例如日本 8%、10%）
+   差額 ＝ 實付 − 商品合計，系統依差額自動判斷是哪一種收據：
+
+   A. 差額 > 0：未稅價收據，結帳時另外加稅（美國銷售稅、日本未稅價）
+      → 稅只加在課稅商品上
+        一種稅率：按課稅商品的金額比例分（稅率是多少都一樣正確）
+        兩種稅率：按「金額 × 稅率」分（同樣 100 元，10% 的分到的稅比 8% 多）
+   B. 差額 < 0：含稅價收據，免稅商品在結帳時扣掉稅
+      → 折抵只從免稅商品扣，按免稅商品的比例分
+   C. 差額 = 0：含稅價、沒有免稅（台灣、韓國、歐洲多半是這種）
+
    加總一定剛好等於實付（allocate 會處理零頭）。
-   例：Julie 免稅 4,389、Amy 免稅 1,782，實付 5,610
-       → 折抵 561，Julie −399、Amy −162 → Julie 3,990、Amy 1,620
    ========================================================= */
+const ITEM_WARN_PCT = 20;   // 免稅折抵超過免稅商品的 20% 就提醒（一般約 7–9%）
+const RATES_KEY = 'travelSplit_taxRates_';   // 每種貨幣上次用的兩種稅率
+
+function itemCols() { return draft.twoRates ? ['t1', 't2', 'free'] : ['t1', 'free']; }
+function itemRates() { return draft.rateText.map(t => parseFloat(t)); }
+function itemColLabel(col) {
+  if (col === 'free') return draft.twoRates ? '免稅' : '免稅／不課稅';
+  if (!draft.twoRates) return '課稅';
+  const r = draft.rateText[col === 't1' ? 0 : 1];
+  return `課稅 ${r || '?'}%`;
+}
+
+function setTwoRates(on) {
+  draft.twoRates = on;
+  if (on && !draft.rateText.some(Boolean)) {
+    const saved = localStorage.getItem(RATES_KEY + draft.currency);
+    draft.rateText = saved ? saved.split(',') : (draft.currency === 'JPY' ? ['8', '10'] : ['', '']);
+  }
+  updateForm();
+}
+function setRateText(i, value) {
+  draft.rateText[i] = value.trim();
+  // 只改欄位名稱，不重建輸入框
+  document.querySelectorAll('#split-detail [data-label-col]').forEach(el => { el.textContent = itemColLabel(el.dataset.labelCol); });
+  updateItemized();
+}
 
 // 把 - * / x 換成計算機用的符號
 function normalizeOps(t) {
   return String(t).replace(/,/g, '').replace(/-/g, '−').replace(/[*xX]/g, '×').replace(/\//g, '÷');
 }
 
-// 輸入框可以直接打算式，例如 1980-198、1980*0.9；空白 = 0；格式錯誤回傳 null
+// 輸入框可以直接打算式，例如 1980-198、1980*0.9、4*99；空白 = 0；格式錯誤回傳 null
 function parseItemText(text, cur) {
   const t = normalizeOps(text || '').trim();
   if (!t) return 0;
@@ -3003,45 +3062,85 @@ function parseItemText(text, cur) {
 }
 
 function setItemText(id, col, value) {
-  draft.itemText[id] = draft.itemText[id] || { free: '', normal: '' };
+  draft.itemText[id] = draft.itemText[id] || { t1: '', t2: '', free: '' };
   draft.itemText[id][col] = value;
   updateItemized();
 }
 
-const ITEM_WARN_PCT = 20;   // 折抵超過免稅商品的 20% 就提醒（日本免稅約 8–10%）
+// 離開輸入框時，把算式換成算好的數字（欄位很窄，算式太長會看不到）
+function settleItemExpr(input, id, col) {
+  if (!/[-+*\/xX×÷−]/.test(input.value)) return;
+  const v = parseItemText(input.value, draft.currency);
+  if (v === null) return;
+  input.value = v ? minorToText(v, draft.currency) : '';
+  setItemText(id, col, input.value);
+}
 
 function computeItemized(amount, cur, ids) {
-  const free = {}, normal = {};
+  const cols = itemCols();
+  const v = {};   // v[id] = { t1, t2, free }（一種稅率時 t2 一律是 0）
   for (const id of ids) {
     const t = draft.itemText[id] || {};
-    free[id] = parseItemText(t.free, cur);
-    normal[id] = parseItemText(t.normal, cur);
-    if (free[id] === null || normal[id] === null) return { error: `${memberName(id)} 的金額格式不對` };
+    v[id] = { t1: 0, t2: 0, free: 0 };
+    for (const c of cols) {
+      v[id][c] = parseItemText(t[c], cur);
+      if (v[id][c] === null) return { error: `${memberName(id)} 的金額格式不對` };
+    }
   }
-  const freeSum = ids.reduce((a, id) => a + free[id], 0);
-  const normalSum = ids.reduce((a, id) => a + normal[id], 0);
-  const gross = freeSum + normalSum;
-  const base = { free, normal, freeSum, normalSum, gross };
+  const sum = c => ids.reduce((a, id) => a + v[id][c], 0);
+  const t1Sum = sum('t1'), t2Sum = sum('t2'), freeSum = sum('free');
+  const taxedSum = t1Sum + t2Sum;
+  const gross = taxedSum + freeSum;
+  const rates = draft.twoRates ? itemRates() : null;
+  const base = { v, t1Sum, t2Sum, freeSum, taxedSum, gross, rates };
+  const f = x => formatAmount(x, cur);
+  if (rates && !(rates[0] >= 0 && rates[1] >= 0 && rates[0] + rates[1] > 0)) return { ...base, error: '請輸入兩種稅率' };
   if (!amount) return { ...base, error: '請先在最上面輸入實際付的金額' };
   if (!gross) return { ...base, error: '請填每個人的商品金額' };
-  const discount = gross - amount;
-  if (discount < 0) return { ...base, discount, error: `實付比商品合計多 ${formatAmount(-discount, cur)}，請檢查金額` };
-  if (discount > freeSum) {
-    return { ...base, discount, error: freeSum
-      ? `折抵 ${formatAmount(discount, cur)} 比免稅商品還多，請檢查金額`
-      : `實付比商品合計少 ${formatAmount(discount, cur)}，但沒有填免稅商品` };
-  }
+  const diff = amount - gross;
+
   // 台幣、日圓這類整數貨幣，輸入都是整數時，結果也分到整數（不會出現 ¥1,620.37）
-  const all = [amount, ...ids.map(id => free[id]), ...ids.map(id => normal[id])];
-  const unit = (CURRENCIES[cur].showCents === 'auto' && all.every(v => v % 100 === 0)) ? 100 : 1;
-  const freeAfter = allocate((freeSum - discount) / unit, ids.map(id => free[id])).map(v => v * unit);
-  const shares = {}, cut = {}, itemized = {};
+  const all = [amount, ...ids.flatMap(id => [v[id].t1, v[id].t2, v[id].free])];
+  const unit = (CURRENCIES[cur].showCents === 'auto' && all.every(x => x % 100 === 0)) ? 100 : 1;
+
+  let adj = ids.map(() => 0);   // 每人加上（稅）或扣掉（免稅折抵）的金額
+  let kind = 'none', warning = '', expectedTax = null;
+
+  if (diff > 0) {
+    // A. 未稅價＋稅：稅只加在課稅商品上
+    if (!taxedSum) return { ...base, diff, error: `實付比商品合計多 ${f(diff)}，但沒有填課稅商品。如果收據是含稅價，請檢查金額` };
+    kind = 'tax';
+    const weights = rates
+      ? ids.map(id => v[id].t1 * rates[0] + v[id].t2 * rates[1])   // 兩種稅率：按「金額 × 稅率」
+      : ids.map(id => v[id].t1);                                    // 一種稅率：按金額比例
+    adj = allocate(diff / unit, weights).map(x => x * unit);
+    if (rates) {
+      // 依稅率算一次（各稅率分開計算、小數捨去），拿來跟收據核對
+      const u = CURRENCIES[cur].showCents === 'auto' ? 100 : 1;
+      expectedTax = Math.floor(t1Sum * rates[0] / 100 / u) * u + Math.floor(t2Sum * rates[1] / 100 / u) * u;
+      if (Math.abs(diff - expectedTax) > 3 * u) {
+        warning = `多出的 ${f(diff)} 跟依稅率算出來的 ${f(expectedTax)} 對不上。請確認收據是未稅價、稅率正確，以及金額有沒有填錯欄`;
+      }
+    }
+  } else if (diff < 0) {
+    // B. 含稅價－免稅折抵：只從免稅商品扣
+    const cut = -diff;
+    if (!freeSum) return { ...base, diff, error: `實付比商品合計少 ${f(cut)}，但沒有填免稅商品` };
+    if (cut > freeSum) return { ...base, diff, error: `折抵 ${f(cut)} 比免稅商品還多，請檢查金額` };
+    kind = 'cut';
+    adj = allocate(cut / unit, ids.map(id => v[id].free)).map(x => -x * unit);
+    if (cut / freeSum * 100 > ITEM_WARN_PCT) {
+      warning = `免稅折抵 ${f(cut)} 約是免稅商品的 ${(cut / freeSum * 100).toFixed(0)}%，比一般免稅（約 7–9%）高很多，請確認實付和商品金額`;
+    }
+  }
+
+  const shares = {}, adjBy = {}, itemized = {};
   ids.forEach((id, i) => {
-    cut[id] = free[id] - freeAfter[i];
-    shares[id] = freeAfter[i] + normal[id];
-    itemized[id] = { free: free[id], normal: normal[id] };
+    adjBy[id] = adj[i];
+    shares[id] = v[id].t1 + v[id].t2 + v[id].free + adj[i];
+    itemized[id] = draft.twoRates ? { t1: v[id].t1, t2: v[id].t2, free: v[id].free } : { t1: v[id].t1, free: v[id].free };
   });
-  return { ...base, discount, shares, cut, itemized };
+  return { ...base, diff, kind, expectedTax, warning, shares, adjBy, itemized };
 }
 
 function updateItemized() {
@@ -3052,27 +3151,35 @@ function updateItemized() {
   const amount = parseAmount(document.getElementById('f-amount').value || '0', cur) || 0;
   const ids = draft.participants;
   const r = computeItemized(amount, cur, ids);
-  const f = v => formatAmount(v, cur);
+  const f = x => formatAmount(x, cur);
   if (r.error) {
     el.innerHTML = (r.gross ? `<div class="line total"><span>商品合計</span><b>${f(r.gross)}</b></div>` : '') +
       `<div class="remain bad" style="margin:0">${escapeHTML(r.error)}</div>`;
     return;
   }
   let html = `<div class="line total"><span>商品合計 ${f(r.gross)} → 實付</span><b>${f(amount)}</b></div>`;
-  const pct = r.freeSum ? r.discount / r.freeSum * 100 : 0;
-  html += r.discount
-    ? `<div class="line"><span>免稅折抵（按免稅商品比例分攤）<small>約免稅商品的 ${pct.toFixed(1)}%</small></span><b>−${f(r.discount)}</b></div>`
-    : '<div class="line"><span>沒有免稅折抵（實付 ＝ 商品合計）</span></div>';
+  if (r.kind === 'tax') {
+    const note = r.rates
+      ? (r.warning ? `依稅率計算應該是 ${f(r.expectedTax)}` : `依稅率計算 ${f(r.expectedTax)}，對得上 ✓`)
+      : `約課稅商品的 ${(r.diff / r.taxedSum * 100).toFixed(2)}%，可以跟收據上的稅率對照`;
+    html += `<div class="line"><span>稅（加在課稅商品上）<small>${note}</small></span><b>＋${f(r.diff)}</b></div>`;
+  } else if (r.kind === 'cut') {
+    html += `<div class="line"><span>免稅折抵（從免稅商品扣）<small>約免稅商品的 ${(-r.diff / r.freeSum * 100).toFixed(1)}%</small></span><b>−${f(-r.diff)}</b></div>`;
+  } else {
+    html += '<div class="line"><span>沒有另外加稅或折抵（實付 ＝ 商品合計）</span></div>';
+  }
   html += ids.map(id => {
+    const x = r.v[id], a = r.adjBy[id];
     const parts = [];
-    if (r.free[id]) parts.push(`免稅 ${f(r.free[id])}${r.cut[id] ? ` −${f(r.cut[id])}` : ''}`);
-    if (r.normal[id]) parts.push(`不免稅 ${f(r.normal[id])}`);
-    return `<div class="line"><span>${escapeHTML(memberName(id))}<small>${parts.join(' ＋ ') || '沒有商品'}</small></span><b>${f(r.shares[id])}</b></div>`;
+    if (x.t1) parts.push(`${r.rates ? r.rates[0] + '%' : '課稅'} ${f(x.t1)}`);
+    if (x.t2) parts.push(`${r.rates[1]}% ${f(x.t2)}`);
+    if (x.free) parts.push(`免稅 ${f(x.free)}`);
+    if (a > 0) parts.push(`稅 ＋${f(a)}`);
+    if (a < 0) parts.push(`折抵 −${f(-a)}`);
+    return `<div class="line"><span>${escapeHTML(memberName(id))}<small>${parts.join('・') || '沒有商品'}</small></span><b>${f(r.shares[id])}</b></div>`;
   }).join('');
   html += '<div class="remain ok" style="margin-top:6px">✓ 加起來剛好等於實付</div>';
-  if (pct > ITEM_WARN_PCT) {
-    html += `<div class="remain bad" style="margin-top:4px">折抵比一般免稅（約 10%）高很多，請確認實付和商品金額有沒有輸入錯</div>`;
-  }
+  if (r.warning) html += `<div class="remain bad" style="margin-top:4px">${escapeHTML(r.warning)}</div>`;
   el.innerHTML = html;
 }
 
